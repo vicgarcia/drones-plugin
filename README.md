@@ -24,16 +24,15 @@ interactive map, with aviation weather, a go/no-go preflight and live air traffi
 ## Installation
 
 ```bash
-# Clone and make executable
+# Clone the repo
 git clone https://github.com/vicgarcia/drones.py.git
 cd drones.py
-chmod +x drones.py
 
 # Run (dependencies install on first run)
-./drones.py --help
+uv run --script skills/drones/scripts/drones.py --help
 
-# Install
-cp drones.py ~/.local/bin
+# Install in PATH
+cp skills/drones/scripts/drones.py ~/.local/bin/drones.py
 chmod +x ~/.local/bin/drones.py
 ```
 
@@ -237,7 +236,7 @@ reasoning behind the skill and map defaults.
 Run the offline regression suite (service calls are mocked, network access is refused):
 
 ```bash
-uv run --with 'geopy>=2.4.0' --with 'requests>=2.31.0' python -m unittest discover -v
+uv run --with 'geopy>=2.4.0' --with 'requests>=2.31.0' python -m unittest discover -s tests -v
 ```
 
 ## Agent Skill
@@ -256,7 +255,7 @@ each rule.
 mkdir -p /path/to/agent/skills/drones
 
 # Copy SKILL.md
-cp /path/to/drones.py/SKILL.md /path/to/agent/skills/drones/SKILL.md
+cp /path/to/drones.py/skills/drones/SKILL.md /path/to/agent/skills/drones/SKILL.md
 
 # Ensure drones.py is executable and in PATH
 chmod +x ~/.local/bin/drones.py

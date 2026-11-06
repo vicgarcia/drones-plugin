@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 
-SCRIPT = Path(__file__).resolve().parent / "drones.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "skills" / "drones" / "scripts" / "drones.py"
 SPEC = importlib.util.spec_from_file_location("drones_cli_under_test", SCRIPT)
 drones = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(drones)
