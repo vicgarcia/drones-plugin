@@ -1,0 +1,12 @@
+{
+  "name": "drones-py",
+  "description": "drones.py, an FAA airspace and drone rules skill for Claude.",
+  "owner": { "name": "vicgarcia" },
+  "plugins": [
+    {
+      "name": "drones",
+      "source": "./",
+      "description": "FAA airspace, drone rules, aviation weather and a live airspace map for US drone pilots."
+    }
+  ]
+}

@@ -470,8 +470,15 @@ Decisions made while shaping how agents use drones.py, and why.
 - **Live view is opt-in**: `--adsb --radar` only for "live", "traffic" or "radar" requests.
 - **Mission areas**: `airspace` checks one point, so a site that straddles a LAANC grid or class
   boundary needs `nearby` with a radius about the site's size, planning to the lowest ceiling.
-- **One file.** The skill is a single SKILL.md, including the FAA rules reference, so installing it
-  is one copy.
+- **One skill folder.** The skill is a single SKILL.md, including the FAA rules reference, beside
+  the script in `skills/drones/`, so installing it is one plugin install or one folder copy.
+- **Plugin packaging.** The repo root is a Claude plugin (`.claude-plugin/plugin.json`) and a
+  one-plugin marketplace (`drones-py`). Keep SKILL.md in `skills/drones/`: at the root, Cowork
+  installs the skill without `scripts/`. SKILL.md runs `uv run --script
+  ${CLAUDE_SKILL_DIR}/scripts/drones.py`, and its `allowed-tools` rule matches that exact command,
+  so keep the two in sync. Cowork runs it in a cloud sandbox: PyPI is reachable by default, but
+  the service domains in `compatibility` must be allowed, and nothing served on localhost reaches
+  the user. The release zip (`.github/workflows/release.yml`) is the same plugin, for upload.
 
 ### Distances
 

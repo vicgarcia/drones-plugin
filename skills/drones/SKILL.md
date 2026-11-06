@@ -1,13 +1,30 @@
 ---
 name: drones
 description: FAA airspace and drone rules for US drone pilots, with aviation weather and a live map on request. Use when the user wants to know whether they can fly a drone somewhere (controlled airspace, LAANC ceilings, TFRs, prohibited or special use airspace, stadiums), wants to scout a spot or size up a mission area, asks to see the airspace on a map, or asks how the drone rules work (Part 107, recreational flying, registration, Remote ID, night or over-people operations, waivers, authorizations, accident reporting). Also covers current conditions and forecasts (METAR/TAF), a go/no-go preflight for a place and time, and a live map with air traffic and weather radar, but only when the user asks for weather or a live view. US only.
-compatibility: Requires 'drones.py' script in PATH. No API keys needed. Uses FAA UAS Data Delivery System (ArcGIS), tfr.faa.gov, NOAA Aviation Weather Center, adsb.fi, and OpenStreetMap Nominatim.
+compatibility: Requires uv and network access to services6.arcgis.com, tfr.faa.gov, aviationweather.gov and nominatim.openstreetmap.org, plus opendata.adsb.fi and opengeo.ncep.noaa.gov for the live map. No API keys needed. uv installs Python packages from PyPI on first run.
+allowed-tools: Bash(uv run --script ${CLAUDE_SKILL_DIR}/scripts/drones.py *)
 ---
 
 # drones.py
 
 Airspace lookups for drone (Part 107 and recreational) flights, with weather and live traffic as
 opt-ins. Every command takes a place name, an address, or `lat,lng` coordinates.
+
+## Invocation
+
+```bash
+uv run --script ${CLAUDE_SKILL_DIR}/scripts/drones.py <command> [args]
+```
+
+Examples in this document write `drones.py` as shorthand for that whole command; always run the
+full form. uv installs the script's dependencies on first run, so the first call can take a few
+seconds longer.
+
+If every command fails with a connection or DNS error, the sandbox is blocking the FAA or
+geocoding services. Tell the user to allow the domains listed under `compatibility` in their
+network settings (Cowork: Settings > Capabilities, or the organization's network egress
+allowlist) and start a new session, since network changes don't apply to a session that's
+already running. Never guess at airspace or TFRs.
 
 ## Defaults: airspace first
 
@@ -148,6 +165,9 @@ drones.py map "Denver, CO" --geojson > denver.geojson
 - **Blocks until stopped.** Run it in the background and give the user the URL it prints, which
   falls back to a free port when 8765 is taken. Before starting another, stop the old one
   (`pkill -f "drones.py map"`), and stop it when the user is done.
+- The page is only reachable from the computer the server runs on, and `--png` needs a desktop
+  browser. In a sandbox such as Cowork, don't start the server: answer from `airspace` and
+  `nearby`, or hand over `--geojson` if the user wants the shapes.
 - Airspace only by default: LAANC grid, class, special use, defense and security airspace,
   TFRs, stadiums and airports, each toggled in the layer panel. TFRs are drawn out to 30 NM, and
   the LAANC grid and TFR toggles are listed even when there are none. The search center and

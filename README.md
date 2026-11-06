@@ -13,7 +13,7 @@ interactive map, with aviation weather, a go/no-go preflight and live air traffi
 - **Preflight** - Airspace plus the weather for when you plan to fly, as one GO / CAUTION / NO-GO verdict
 - **METAR and TAF, decoded** - Current conditions and forecasts in plain language, with Part 107 and wind-limit checks
 - **Nearest station logic** - Current conditions from the closest METAR station, forecasts from the closest airport that issues TAFs
-- **Agent skill** - `SKILL.md` lets coding agents answer "can I fly here?" and drone rules questions
+- **Claude plugin** - The `drones` skill lets Claude answer "can I fly here?" and drone rules questions
 - **No API keys** - FAA UAS Data Delivery System, tfr.faa.gov, NOAA Aviation Weather Center, adsb.fi, OpenStreetMap
 
 ## Prerequisites
@@ -22,6 +22,8 @@ interactive map, with aviation weather, a go/no-go preflight and live air traffi
 - [uv](https://github.com/astral-sh/uv) package manager
 
 ## Installation
+
+### Install for uv
 
 ```bash
 # Clone the repo
@@ -35,6 +37,15 @@ uv run --script skills/drones/scripts/drones.py --help
 cp skills/drones/scripts/drones.py ~/.local/bin/drones.py
 chmod +x ~/.local/bin/drones.py
 ```
+
+### Install as a Claude plugin (Cowork, Claude Code)
+
+The repo is a plugin marketplace with one plugin, `drones`.
+
+- **Cowork / Claude Desktop:** Customize > Plugins > Add > Add marketplace, enter `vicgarcia/drones.py`, then add the `drones` plugin. Or download `drones-v*.zip` from [Releases](https://github.com/vicgarcia/drones.py/releases) and upload it as a custom plugin.
+- **Claude Code:** `/plugin marketplace add vicgarcia/drones.py`, then `/plugin install drones@drones-py`.
+
+The skill runs the script with `uv run --script`, so the environment needs uv and network access to PyPI (for the dependencies) and the data services: `services6.arcgis.com`, `tfr.faa.gov`, `aviationweather.gov` and `nominatim.openstreetmap.org`, plus `opendata.adsb.fi` and `opengeo.ncep.noaa.gov` for the live map. Cowork's sandbox allows package managers by default, but not these: add them under Settings > Capabilities (on Team and Enterprise, the organization's network egress allowlist), then start a new session. The interactive map needs a local machine with a browser. In a sandbox, Claude answers from `airspace` and `nearby` instead.
 
 ## Configuration
 
@@ -241,29 +252,27 @@ uv run --with 'geopy>=2.4.0' --with 'requests>=2.31.0' python -m unittest discov
 
 ## Agent Skill
 
-This project includes a `SKILL.md` file for use with AI coding agents (Claude Code, etc.). The skill
-answers "can I fly here?" with a short verdict card, sizes up mission areas, and opens the map when
-asked. It treats airspace as the default question: weather, live traffic and radar only come in when
+The skill lives in `skills/drones/` (`SKILL.md` plus `scripts/`). It answers "can I fly here?" with
+a short verdict card, sizes up mission areas, and opens the map when asked. It treats airspace as the default question: weather, live traffic and radar only come in when
 you ask for them. It also acts as a UAS pilot expert, answering Part 107 and recreational rules
 questions from the regulations in effect, with links to the eCFR sections and FAA pages behind
 each rule.
 
 ### Installation
 
+For Claude, install it as a plugin (see Installation). For other agents, copy that folder into
+their skills directory:
+
 ```bash
-# Create skills directory
-mkdir -p /path/to/agent/skills/drones
-
-# Copy SKILL.md
-cp /path/to/drones.py/skills/drones/SKILL.md /path/to/agent/skills/drones/SKILL.md
-
-# Ensure drones.py is executable and in PATH
-chmod +x ~/.local/bin/drones.py
+cp -r skills/drones /path/to/agent/skills/
 ```
 
-### Usage with Claude Code
+`SKILL.md` runs the script as `uv run --script ${CLAUDE_SKILL_DIR}/scripts/drones.py`. Claude fills
+in `${CLAUDE_SKILL_DIR}`; for other agents, replace it with the skill directory's path.
 
-Add the skills directory to your agent configuration, then interact naturally:
+### Usage
+
+Once installed, ask naturally:
 
 > "Can I fly my drone at 4406 Fillmore St in Hollywood?"
 > "Can I fly at Hollywood Beach tomorrow morning, and what's the wind doing?"

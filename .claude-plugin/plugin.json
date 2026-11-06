@@ -1,0 +1,7 @@
+{
+  "name": "drones",
+  "description": "FAA airspace, drone rules, aviation weather and a live airspace map for US drone pilots.",
+  "author": { "name": "vicgarcia" },
+  "homepage": "https://github.com/vicgarcia/drones.py",
+  "repository": "https://github.com/vicgarcia/drones.py"
+}
