@@ -492,11 +492,23 @@ Decisions made while shaping how agents use drones.py, and why.
 
 ### Map page
 
-- Airspace only by default. No legends; layers are toggled in a lowercase panel without counts.
-- Panel order is draw order with moves (`PANEL_MOVES`): TFRs above class airspace, LAANC right after
-  it. Draw order itself keeps TFRs on top so they stay clickable.
-- LAANC grid and TFR toggles are always listed (`ALWAYS_LISTED`), even when empty, so "none here"
-  is visible. The search center and radius ring are always drawn and not listed (`FIXED_OVERLAYS`).
+- Airspace only by default. Kestrel-style controls use a translucent white, 12 px rounded
+  search/layers card at top right, segmented basemaps and two-column layer switches, plus
+  matching zoom/location buttons at top left. The bottom handle collapses the options.
+  Phones start collapsed, reserve room for the map buttons and use one column when opened.
+- Everyday layers come first in the panel (radar/traffic when enabled, TFRs, LAANC, airports),
+  independently of the draw order, which keeps TFRs on top so they stay clickable. No legends
+  or layer counts. The custom control mirrors Leaflet's overlayadd/overlayremove events so
+  programmatic toggles, traffic polling and viewport refresh retain their existing behavior.
+- Only the panel's open/closed preference is stored in localStorage, guarded for private modes.
+  CLI launch coordinates, basemap and opt-in layers are never overridden by a remembered view.
+  Search submits with Enter or its magnifier; the clear button also cancels pending results.
+  Provider attribution remains visible, unlike the old Kestrel map's hidden attribution.
+  A bottom status pill retains fetch-age and failure warnings outside the collapsed card.
+- Interactive maps list all thematic toggles, even when initially empty, so panning into a new
+  area can populate them without rebuilding the control. Exports retain the smaller snapshot
+  panel (`ALWAYS_LISTED` keeps LAANC/TFR). The original center/radius stay fixed and unlisted
+  (`FIXED_OVERLAYS`); in-map search adds a separate pin.
 - Styling: radius ring and a tiny center dot in `#737373`; airports as blue dots without a ring
   (public `#2166ac` 8.5 px, private `#6baed6` 6 px). `marker-size` takes a number for sizes between
   simplestyle's names.
@@ -507,6 +519,42 @@ Decisions made while shaping how agents use drones.py, and why.
   continuous zoom rather than Leaflet's stepped wheel zoom.
 - The page title is just the place; the attribution line credits the tile, traffic and radar
   providers without Leaflet's prefix.
+
+### Interactive navigation and freshness
+
+Ordinary browser maps opt into `MapData`; `--geojson` and `--png` still use the original
+`survey()` snapshot. Neither CLI point/weather checks nor exported footprints change.
+
+- `airspace.json?layer=KEY&bbox=W,S,E,N` queries one enabled FAA layer by envelope. Pan/zoom
+  is debounced 250 ms, with four client workers and a shared four-request server limit.
+  Envelopes are rounded outward to a 0.05-degree grid and those actual envelopes are the cache
+  keys. The cache holds at most 256 entries and coalesces identical in-flight misses. FAA
+  results live six hours; a broad view over 120 NM across displays a zoom-in warning. Dateline
+  envelopes split into two ordinary ArcGIS queries. Stadium lookups expand by 3 NM so a ring
+  whose center is just outside the view is still fetched. Old responses cannot overwrite a
+  newer viewport. Replacing LAANC data also rebuilds its ceiling-label references.
+- `tfrs.json?bbox=W,S,E,N` shares a fifteen-minute nationwide shape cache and separate fifteen-minute
+  NOTAM-detail entries. It selects shapes intersecting the viewport or within 30 NM of its
+  center, annotating copies at the current UTC time: scheduled/active/expired is never frozen
+  into the raw cache. The response's `fetched_at` is the oldest relevant successful fetch.
+  Browser refresh is scheduled from that timestamp, not from each pan, so browsing or another
+  tab cannot postpone the fifteen-minute deadline. `next_change_at` also triggers a redraw at a
+  known start/end time, recomputing status without unnecessarily refetching unexpired caches.
+  Hidden tabs check freshness on return.
+  A feed/detail failure carries stale/incomplete warnings and keeps unknown timing conservative;
+  expired cached timing cannot erase a restriction after a failed refresh. The page retains old
+  shapes on errors/partial responses and retries after 30 seconds. A successful empty response
+  clears old TFRs. This polling is not real-time data or authorization.
+- `search.json?q=TEXT` uses one shared, serialized `Locator` with its 1.1-second Nominatim
+  pacing, up to five results, and a normalized 24-hour result cache. Only Enter/Search submits;
+  typing alone never makes requests. Raw coordinates skip even reverse geocoding. Names are
+  rendered as text, result selection adds a separate pin and recenters, and stale responses
+  cannot override a newer search. The original CLI radius/center remains a reference. Search
+  does not call `check_point()` or issue a legal verdict.
+
+Live route errors are JSON with a `detail`: HTTP 400 for invalid input, 502 for upstream
+failures without usable cached data. `data.json` is still the startup snapshot, which also
+supplies fallback features if the interactive source subsequently fails.
 
 ---
 

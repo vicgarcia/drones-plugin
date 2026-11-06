@@ -9,7 +9,7 @@ interactive map, with aviation weather, a go/no-go preflight and live air traffi
 
 - **Single-file executable** - Uses `uv run --script` with inline dependencies (PEP 723)
 - **Airspace** - Controlled airspace, LAANC ceilings, special use and security airspace, TFRs and stadiums at a point or within a radius, plus TFRs close by
-- **Interactive map** - The airspace around a point on a local Leaflet map, with optional live air traffic and weather radar; or as GeoJSON or a PNG
+- **Interactive map** - Airspace loads as you pan and zoom, with fifteen-minute TFR refreshes, address/coordinate search and optional live traffic/radar; or export a fixed-area GeoJSON or PNG
 - **Preflight** - Airspace plus the weather for when you plan to fly, as one GO / CAUTION / NO-GO verdict
 - **METAR and TAF, decoded** - Current conditions and forecasts in plain language, with Part 107 and wind-limit checks
 - **Nearest station logic** - Current conditions from the closest METAR station, forecasts from the closest airport that issues TAFs
@@ -205,16 +205,43 @@ drones.py map "Chicago Midway Airport" --adsb --radar
 The map shows airspace only unless you opt in to live traffic or radar: the LAANC grid colored
 by ceiling (red at 0 ft to green at 400 ft, with the number on each cell once zoomed in), class
 airspace in sectional chart style, special use, prohibited, defense and security areas, TFRs,
-stadiums and airports. Every layer is a toggle, and clicking a feature shows its details. The
-search center and radius ring are always drawn. Basemaps are `street` (default), `satellite`,
-`light` and `dark`, all switchable on the map. The search radius is 5 NM by default (up to 30) for
-both `map` and `nearby`. TFRs are always included out to 30 NM, whatever the radius.
+stadiums and airports. Clicking a feature shows its details. A Kestrel-style rounded card at
+top right combines search, segmented basemap choices and layer switches; its bottom handle
+collapses the options. Matching zoom/location buttons sit at top left, with freshness/errors in
+a bottom status pill. On phones the options start collapsed; only the panel's open/closed state
+is remembered, never a previous location overriding the CLI launch point. Provider attribution
+stays visible. The original search center and radius ring stay drawn as a reference. Basemaps are `street`
+(default), `satellite`, `light` and `dark`, all switchable on the map. The launch/export radius
+is 5 NM by default (up to 30), as for `nearby`.
+
+**Browse:** panning or zooming loads the enabled airspace layers for the new viewport, after a
+250 ms pause. Regional views up to 120 NM across are supported; broader views show a zoom-in
+warning rather than silently pretending all airspace was loaded. Server-side FAA results are
+cached for six hours in bounded memory, and identical concurrent requests share one fetch.
+Disabled layers stay disabled. Airport distances in popups remain relative to the launch point.
+
+**TFRs:** shapes and NOTAM timing details are rechecked every **15 minutes**, independently of
+the ordinary airspace cache, with earlier redraws at known TFR start/end times. The map
+includes TFRs intersecting the viewport and within 30 NM
+of its center. The status panel shows the oldest relevant fetch time. Failed or partial refreshes
+retain restrictions and display a stale/incomplete warning; failures retry after 30 seconds.
+Returning to a visible tab checks freshness. Fifteen-minute polling is not real-time FAA clearance.
+
+**Search:** type an address, place, or `lat,lng` and press **Enter** or Search. One result
+recenters directly; multiple results offer a selection. Coordinates bypass the geocoder.
+Search never runs on each keystroke; requests share a paced Nominatim client and cached results.
+A separate search pin is added without moving the original radius ring. Searching does not
+perform an `airspace` verdict or grant authorization.
+
+**Exports:** `--geojson` and `--png` remain snapshots around the requested launch point, with
+TFRs out to 30 NM. PNGs have no interactive search or viewport/TFR refreshes.
 
 `--adsb` adds live air traffic from [adsb.fi](https://adsb.fi), polled every 3 seconds and coloured by
 altitude; aircraft on the ground are left off. Coverage comes from volunteer ground receivers, so low traffic far from a feeder and
 aircraft without ADS-B are missing: situational awareness, not see-and-avoid. `--radar` adds
 NOAA's MRMS base reflectivity mosaic (lower 48), refreshed every 2 minutes. Both are toggles on
-the map, and neither affects `--geojson`.
+the map, and neither affects `--geojson`. If their toggles are absent, the map was launched
+without those flags; use `--adsb --radar` to include both.
 
 Serves on `127.0.0.1`, falls back to a free port if 8765 is taken, and runs until Ctrl+C.
 
@@ -249,6 +276,15 @@ Run the offline regression suite (service calls are mocked, network access is re
 ```bash
 uv run --with 'geopy>=2.4.0' --with 'requests>=2.31.0' python -m unittest discover -s tests -v
 ```
+
+Optional browser regressions use an installed Chrome/Edge/Chromium and intercept all map/data
+requests. They download only the pinned Leaflet JS/CSS, never live FAA/weather/traffic data:
+
+```bash
+DRONES_BROWSER_TESTS=1 uv run --with geopy --with requests --with playwright python -m unittest discover -s tests -p test_map_browser.py -v
+```
+
+These browser tests are skipped by the default offline suite.
 
 ## Agent Skill
 

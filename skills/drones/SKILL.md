@@ -169,14 +169,25 @@ drones.py map "Denver, CO" --geojson > denver.geojson
   browser. In a sandbox such as Cowork, don't start the server: answer from `airspace` and
   `nearby`, or hand over `--geojson` if the user wants the shapes.
 - Airspace only by default: LAANC grid, class, special use, defense and security airspace,
-  TFRs, stadiums and airports, each toggled in the layer panel. TFRs are drawn out to 30 NM, and
-  the LAANC grid and TFR toggles are listed even when there are none. The search center and
-  radius ring are always shown.
-- Basemaps: `street` (default), `satellite`, `light` and `dark`, all switchable on the map.
-- Opt-ins for a live view: `--adsb` air traffic, `--radar` NOAA weather radar. The map never
-  shows station weather; use `metar`/`taf` for that.
-- `--geojson` prints the airspace layers instead of serving; `--png FILE` saves a screenshot
-  (needs Chrome, Edge or Chromium, or `DRONES_BROWSER`) - only when the user asks for an image.
+  TFRs, stadiums and airports, each toggled in the layer panel, including initially empty layers.
+  Enabled layers load as the viewport moves (250 ms debounce, six-hour FAA cache); views wider
+  than 120 NM show a zoom-in warning. The original center and radius ring stay as a reference.
+- TFRs refresh every **15 minutes**, including their NOTAM times, and cover the viewport plus
+  TFRs within 30 NM of its center. The panel shows fetch time and stale/incomplete failures;
+  retained data is not a successful current check. Failures retry after 30 seconds.
+- In-map search accepts an address, place or `lat,lng`, submitted with Enter or Search, never
+  autocomplete. Choose among ambiguous results; one result recenters directly. Coordinates
+  need no geocoding. The new search pin doesn't move the original radius or perform a verdict.
+- Kestrel-style controls: top-right search/layers card with a collapsible bottom handle,
+  segmented `street` / `satellite` / `light` / `dark` basemaps, and layer switches; matching
+  zoom/location buttons at top left. Freshness/errors appear in a bottom status pill.
+  The CLI launch location always wins over previous sessions; only panel expansion is remembered.
+- Opt-ins for a live view: `--adsb` air traffic, `--radar` NOAA weather radar. Their toggles
+  are present only when launched with those flags. The map never shows station weather;
+  use `metar`/`taf` for that.
+- `--geojson` prints a fixed-area snapshot instead of serving; `--png FILE` saves the same
+  fixed-area map with no search or viewport/TFR refresh (needs Chrome, Edge or Chromium, or
+  `DRONES_BROWSER`) - only when the user asks for an image. Both keep TFRs out to 30 NM.
 
 ### preflight - airspace and weather for a time (on request)
 ```bash

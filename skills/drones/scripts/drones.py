@@ -34,8 +34,8 @@ import threading
 import time
 import urllib.parse
 import webbrowser
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from collections import Counter, OrderedDict
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -111,6 +111,16 @@ SCREENSHOT_WAIT_MS = 20000
 # Square, since the map frames the circular search radius
 DEFAULT_PNG_SIZE = (1000, 1000)
 KM_PER_NM = 1.852
+
+# Interactive maps cache the slowly published FAA layers, but not moving TFRs.
+MAP_AIRSPACE_TTL = 6 * 60 * 60
+MAP_TFR_TTL = 15 * 60
+MAP_SEARCH_TTL = 24 * 60 * 60
+MAP_CACHE_ENTRIES = 256
+# Regional views only: don't page through an entire country's LAANC cells.
+MAP_MAX_SPAN_NM = 120
+# Query the same small envelopes when a pan moves by only a few pixels.
+MAP_BBOX_GRID = 0.05
 
 ADVISORY = ("Advisory only - FAA data is not real time. Confirm with B4UFLY or a "
             "LAANC app and check NOTAMs before you fly.")
@@ -306,10 +316,6 @@ MAP_OVERLAYS = [
     ("location", "Location"),
 ]
 
-# The layer panel lists overlays in draw order, except these, which move up
-# to sit just above the overlay named alongside
-PANEL_MOVES = [("tfrs", "class"), ("laanc", "stadiums")]
-
 # Overlays drawn for reference only, never intercepting clicks
 PASSIVE_OVERLAYS = ["radius"]
 
@@ -352,15 +358,98 @@ MAP_PAGE = """\
   }
   .ac span b { font-weight: 650; }
   .ac.emergency svg { filter: drop-shadow(0 0 3px #e7298a) drop-shadow(0 0 3px #e7298a); }
+  /* Kestrel's compact search/layers card and matching map buttons. */
+  .kpanel {
+    --kp-accent: #1f6feb;
+    width: 420px; max-width: calc(100vw - 20px); box-sizing: border-box;
+    background: rgba(255, 255, 255, .97); color: #1d1d1f;
+    border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, .22);
+    font: 13px/1.4 system-ui, sans-serif; overflow: hidden;
+  }
+  .leaflet-touch .leaflet-control.kpanel { border: none; }
+  .kp-search { display: flex; align-items: center; gap: 2px; padding: 4px 4px 0 10px; margin: 0; }
+  .kp-icon { display: flex; color: #8a8a8e; }
+  .kp-search input {
+    flex: 1; min-width: 0; border: none; outline: none; background: none;
+    font: inherit; font-size: 14px; padding: 8px 6px; color: inherit;
+  }
+  .kp-search input::-webkit-search-cancel-button { display: none; }
+  .kp-search input:focus-visible { box-shadow: inset 0 -2px var(--kp-accent); }
+  .kp-search button {
+    display: flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; border: none; border-radius: 8px;
+    background: none; color: #555; cursor: pointer;
+  }
+  .kp-search .kp-submit { width: 24px; color: #8a8a8e; }
+  .kp-search button:hover { background: #f0f0f2; }
+  .kp-search button[hidden] { display: none; }
+  .kp-results {
+    list-style: none; margin: 0; padding: 4px; border-top: 1px solid #eee;
+    max-height: 180px; overflow-y: auto;
+  }
+  .kp-results button {
+    display: block; width: 100%; text-align: left; border: none; background: none;
+    padding: 7px 8px; border-radius: 8px; font: inherit; color: inherit; cursor: pointer;
+  }
+  .kp-results button:hover { background: #f0f0f2; }
+  .kp-body { display: none; border-top: 1px solid #eee; padding: 10px; max-height: calc(100vh - 150px); overflow-y: auto; }
+  .kpanel.open .kp-body { display: block; }
+  .kp-seg { display: flex; background: #f0f0f2; border-radius: 9px; padding: 3px; margin-bottom: 10px; }
+  .kp-seg label { flex: 1; cursor: pointer; }
+  .kp-seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .kp-seg span { display: block; text-align: center; padding: 5px 0; border-radius: 7px; font-weight: 500; color: #555; }
+  .kp-seg input:checked + span { background: #fff; color: #1d1d1f; box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
+  .kp-seg input:focus-visible + span { outline: 2px solid var(--kp-accent); }
+  .kp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; }
+  .kp-layer { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 7px; cursor: pointer; user-select: none; }
+  .kp-layer:hover { background: #f5f5f7; }
+  .kp-layer input { position: absolute; opacity: 0; pointer-events: none; }
+  .kp-name { white-space: nowrap; }
+  .kp-switch { flex: none; position: relative; width: 28px; height: 16px; border-radius: 8px; background: #d1d1d6; transition: background .15s; }
+  .kp-switch::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); transition: transform .15s;
+  }
+  .kp-layer input:checked + .kp-switch { background: var(--kp-accent); }
+  .kp-layer input:checked + .kp-switch::after { transform: translateX(12px); }
+  .kp-layer input:focus-visible + .kp-switch { outline: 2px solid var(--kp-accent); outline-offset: 2px; }
+  .kp-handle { display: flex; align-items: center; justify-content: center; width: 100%; height: 16px; padding: 0; border: none; background: none; cursor: pointer; }
+  .kp-handle span { width: 36px; height: 4px; border-radius: 2px; background: #c7c7cc; transition: background .15s; }
+  .kp-handle:hover { background: #f5f5f7; }
+  .kp-handle:hover span { background: #8a8a8e; }
+  .kp-handle:focus-visible { outline: 2px solid var(--kp-accent); outline-offset: -2px; }
+  .kbuttons { display: flex; flex-direction: column; overflow: hidden; background: rgba(255, 255, 255, .97); border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, .22); }
+  .kbuttons button {
+    display: flex; align-items: center; justify-content: center; width: 42px; height: 42px;
+    padding: 0; border: none; background: none; color: #555; cursor: pointer;
+  }
+  .kbuttons button + button { border-top: 1px solid #eee; }
+  .kbuttons button:hover { background: #f0f0f2; color: #1d1d1f; }
+  .kbuttons button:disabled { color: #c7c7cc; cursor: default; background: none; }
+  .kbuttons button:focus-visible { outline: 2px solid #1f6feb; outline-offset: -2px; }
+  .kp-search button:focus-visible, .kp-results button:focus-visible { outline: 2px solid #1f6feb; outline-offset: -2px; }
+  .map-status {
+    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; max-width: calc(100% - 32px); box-sizing: border-box;
+    background: rgba(34, 34, 34, .85); color: #fff; padding: 4px 10px;
+    border-radius: 12px; font: 12px/1.5 system-ui, sans-serif; pointer-events: none;
+  }
+  .map-status.warning { background: rgba(178, 24, 43, .9); }
+  @media (max-width: 600px) {
+    .kpanel { max-width: calc(100vw - 82px); }
+    .kp-grid { grid-template-columns: 1fr; }
+    .kp-seg span { font-size: 12px; }
+    .map-status { bottom: 44px; }
+  }
 __SCREENSHOT_CSS__
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="status" class="map-status" role="status" aria-live="polite" hidden></div>
 <script>
 const CENTER = __CENTER__;
 const OVERLAYS = __OVERLAYS__;
-const PANEL_MOVES = __PANEL_MOVES__;
 const ALWAYS_LISTED = __ALWAYS_LISTED__;
 const BASEMAPS = __BASEMAPS__;
 const DEFAULT_BASEMAP = __DEFAULT_BASEMAP__;
@@ -369,6 +458,8 @@ const FIXED = __FIXED__;
 // Live layers turned on with --adsb and --radar, null when off
 const TRAFFIC = __TRAFFIC__;
 const RADAR = __RADAR__;
+// Null for PNGs: interactive navigation must not change a snapshot's contents.
+const INTERACTIVE = __INTERACTIVE__;
 // LAANC ceiling labels only once the grid cells are big enough to read
 const LABEL_ZOOM = 14;
 const TRAFFIC_REFRESH_MS = 3 * 1000;
@@ -379,7 +470,7 @@ const METERS_PER_NM = 1852;
 // of snapping out to the next whole level, which can leave half the frame empty
 // The wheel eases toward its target zoom every frame rather than in steps
 const map = L.map('map', {
-  preferCanvas: true, zoomSnap: 0.1,
+  preferCanvas: true, zoomSnap: 0.1, zoomControl: false,
   scrollWheelZoom: false, smoothWheelZoom: true, smoothSensitivity: 1
 });
 // Credit the tile providers only, without Leaflet's own link and flag
@@ -393,13 +484,171 @@ for (const [name, tiles] of Object.entries(BASEMAPS)) {
   });
 }
 bases[DEFAULT_BASEMAP].addTo(map);
-const control = L.control.layers(bases, {}, { collapsed: false }).addTo(map);
+const control = mapPanel().addTo(map);
+addMapButtons();
 const layers = {};
 
 function esc(value) {
   return String(value).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+// Kestrel's controls, kept independent of data loading so PNGs can use the
+// same layer/basemap styling without starting interactive routes or search.
+function mapPanel() {
+  const icons = {
+    search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/>',
+    clear: '<path d="M6 6l12 12M18 6L6 18"/>'
+  };
+  const svg = key => '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round">' + icons[key] + '</svg>';
+  const order = ['radar', 'traffic', 'tfrs', 'laanc', 'airports', 'class', 'sua',
+    'prohibited', 'defense', 'nsufr', 'stadiums'];
+  const names = { nsufr: 'National security', defense: 'National defense', stadiums: 'Stadiums' };
+  const entries = new Map();
+  const panel = L.control({ position: 'topright' });
+  let grid, currentBase = DEFAULT_BASEMAP;
+  panel.onLocateError = message => {
+    const status = document.getElementById('status');
+    status.hidden = !message;
+    status.textContent = message || '';
+    status.classList.toggle('warning', !!message);
+  };
+  panel.onAdd = () => {
+    const el = L.DomUtil.create('div', 'kpanel' + (INTERACTIVE ? ' map-tools' : ''));
+    el.innerHTML = (INTERACTIVE
+      ? '<form class="kp-search" role="search">' +
+        '<button class="kp-submit" type="submit" aria-label="Search" title="Search">' + svg('search') + '</button>' +
+        '<input type="search" aria-label="Search address or coordinates" placeholder="Search address or lat, lng" ' +
+        'autocomplete="off" maxlength="200" required>' +
+        '<button class="kp-clear" type="button" aria-label="Clear search" title="Clear search" hidden>' + svg('clear') + '</button>' +
+        '</form><ul class="kp-results map-results" hidden></ul>' : '') +
+      '<div class="kp-body" id="map-layer-options"><div class="kp-seg" role="radiogroup" aria-label="Basemap"></div>' +
+      '<div class="kp-grid"></div></div>' +
+      '<button class="kp-handle" type="button" aria-controls="map-layer-options"><span></span></button>';
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.disableScrollPropagation(el);
+    grid = el.querySelector('.kp-grid');
+    const handle = el.querySelector('.kp-handle');
+    let open = !INTERACTIVE || window.innerWidth >= 700;
+    if (INTERACTIVE) {
+      try {
+        const saved = JSON.parse(localStorage.getItem('drones-map-panel-open'));
+        if (typeof saved === 'boolean') open = saved;
+      } catch { /* storage is optional */ }
+    }
+    const setOpen = value => {
+      open = value;
+      el.classList.toggle('open', value);
+      handle.setAttribute('aria-expanded', String(value));
+      handle.setAttribute('aria-label', value ? 'Hide layers' : 'Show layers');
+      handle.title = value ? 'Hide layers' : 'Show layers';
+      if (INTERACTIVE) {
+        try { localStorage.setItem('drones-map-panel-open', JSON.stringify(value)); } catch { /* optional */ }
+      }
+    };
+    setOpen(open);
+    handle.addEventListener('click', () => setOpen(!open));
+    for (const name of Object.keys(bases)) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'basemap';
+      input.value = name;
+      input.checked = name === currentBase;
+      const text = document.createElement('span');
+      text.textContent = name[0].toUpperCase() + name.slice(1);
+      label.append(input, text);
+      input.addEventListener('change', () => {
+        if (!input.checked || name === currentBase) return;
+        map.removeLayer(bases[currentBase]);
+        bases[name].addTo(map);
+        currentBase = name;
+      });
+      el.querySelector('.kp-seg').appendChild(label);
+    }
+    if (INTERACTIVE) panel.searchElements = {
+      el, input: el.querySelector('input[type=search]'),
+      results: el.querySelector('.kp-results'), clear: el.querySelector('.kp-clear')
+    };
+    return el;
+  };
+  panel.addOverlay = (layer, label, key) => {
+    const row = document.createElement('label');
+    row.className = 'kp-layer';
+    row.dataset.key = key;
+    row.innerHTML = '<input type="checkbox"><span class="kp-switch" aria-hidden="true"></span><span class="kp-name"></span>';
+    row.querySelector('.kp-name').textContent = names[key] || label;
+    row.title = label;
+    const input = row.querySelector('input');
+    input.setAttribute('aria-label', label);
+    input.checked = map.hasLayer(layer);
+    input.addEventListener('change', () => {
+      if (input.checked) map.addLayer(layer); else map.removeLayer(layer);
+    });
+    entries.set(layer, { row, input, key, label });
+    for (const entry of [...entries.values()].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))) {
+      grid.appendChild(entry.row);
+    }
+    return panel;
+  };
+  // Mirror Leaflet's standard layer-control events, including programmatic
+  // toggles. Traffic polling and viewport refresh already listen for these.
+  map.on('layeradd layerremove', event => {
+    const entry = entries.get(event.layer);
+    if (!entry) return;
+    entry.input.checked = map.hasLayer(event.layer);
+    map.fire(event.type === 'layeradd' ? 'overlayadd' : 'overlayremove', {
+      layer: event.layer, name: entry.label
+    });
+  });
+  return panel;
+}
+
+function addMapButtons() {
+  const paths = {
+    zoomIn: '<path d="M12 5v14M5 12h14"/>',
+    zoomOut: '<path d="M5 12h14"/>',
+    locate: '<circle cx="12" cy="12" r="7"/><path d="M12 1v5M12 18v5M1 12h5M18 12h5"/>' +
+      '<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>'
+  };
+  const located = L.layerGroup().addTo(map);
+  const buttons = L.control({ position: 'topleft' });
+  buttons.onAdd = () => {
+    const el = L.DomUtil.create('div', 'kbuttons');
+    const definitions = [
+      ['zoomIn', 'Zoom in', () => map.zoomIn()],
+      ['zoomOut', 'Zoom out', () => map.zoomOut()],
+      ['locate', 'Show my location', () => map.locate({ setView: true, maxZoom: 15 })]
+    ];
+    for (const [key, label, action] of definitions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.title = label;
+      button.setAttribute('aria-label', label);
+      button.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round">' + paths[key] + '</svg>';
+      button.addEventListener('click', action);
+      el.appendChild(button);
+    }
+    L.DomEvent.disableClickPropagation(el);
+    const sync = () => {
+      el.children[0].disabled = map.getZoom() >= map.getMaxZoom();
+      el.children[1].disabled = map.getZoom() <= map.getMinZoom();
+    };
+    map.on('zoomend', sync);
+    map.whenReady(sync);
+    return el;
+  };
+  buttons.addTo(map);
+  map.on('locationfound', event => {
+    located.clearLayers();
+    located.addLayer(L.circle(event.latlng, { radius: event.accuracy, weight: 1, fillOpacity: 0.1 }));
+    located.addLayer(L.circleMarker(event.latlng, { radius: 7, color: '#fff', weight: 2, fillColor: '#e6550d', fillOpacity: 1 }));
+    control.onLocateError(null);
+  });
+  map.on('locationerror', event => control.onLocateError('Location: ' + event.message));
 }
 
 // simplestyle-spec: https://github.com/mapbox/simplestyle-spec
@@ -487,7 +736,7 @@ if (RADAR) {
     layers: RADAR.layer, format: 'image/png', transparent: true, opacity: 0.6,
     zIndex: 10, attribution: RADAR.attribution
   }).addTo(map);
-  control.addOverlay(radar, 'Weather radar');
+  control.addOverlay(radar, 'Weather radar', 'radar');
   let latest = null;
   // Pin the newest frame, so a long-open map moves forward with the radar
   // rather than showing whatever frame the browser cached first
@@ -535,7 +784,7 @@ if (TRAFFIC) {
   map.createPane('traffic').style.zIndex = 650;
   map.getPane('traffic').style.pointerEvents = 'none';
   const traffic = L.layerGroup([], { attribution: TRAFFIC.attribution }).addTo(map);
-  control.addOverlay(traffic, 'Air traffic');
+  control.addOverlay(traffic, 'Air traffic', 'traffic');
   const markers = new Map();
   let polling = false;
 
@@ -587,12 +836,236 @@ if (TRAFFIC) {
   });
 }
 
+function startInteractiveMap() {
+  const notices = new Map();
+  let loading = 0;
+  let tfrFetchedAt = null;
+  const searchPin = L.layerGroup().addTo(map);
+  const { el, input, results, clear } = control.searchElements;
+  const statusElement = document.getElementById('status');
+
+  function showStatus() {
+    const messages = [...notices.values()];
+    if (loading) messages.push('Loading airspace…');
+    if (tfrFetchedAt) messages.push('TFR data: ' + new Date(tfrFetchedAt).toLocaleTimeString());
+    statusElement.hidden = false;
+    statusElement.textContent = messages.join(' · ') || 'Loading current airspace…';
+    statusElement.classList.toggle('warning', notices.size > 0);
+  }
+  function notice(key, message) {
+    if (message) notices.set(key, message); else notices.delete(key);
+    showStatus();
+  }
+  async function request(url, signal) {
+    const response = await fetch(url, { signal });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || response.statusText);
+    return data;
+  }
+
+  control.onLocateError = message => notice('location', message);
+  let searchGeneration = 0;
+  let searchController;
+  function choose(result) {
+    results.hidden = true;
+    input.value = result.name;
+    clear.hidden = false;
+    searchPin.clearLayers();
+    searchPin.addLayer(L.marker([result.lat, result.lng])
+      .bindPopup(esc(result.name)));
+    map.setView([result.lat, result.lng], 16);
+    notice('search', null);
+  }
+  el.querySelector('form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const query = input.value.trim();
+    if (!query) return;
+    const mine = ++searchGeneration;
+    if (searchController) searchController.abort();
+    searchController = new AbortController();
+    results.hidden = true;
+    notice('search', 'Searching…');
+    try {
+      const data = await request('search.json?q=' + encodeURIComponent(query), searchController.signal);
+      if (mine !== searchGeneration) return;
+      notice('search', data.results.length ? null : 'No places found');
+      if (data.results.length === 1) { choose(data.results[0]); return; }
+      results.replaceChildren();
+      for (const result of data.results) {
+        const row = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = result.name;
+        button.addEventListener('click', () => choose(result));
+        row.appendChild(button);
+        results.appendChild(row);
+      }
+      results.hidden = !data.results.length;
+    } catch (error) {
+      if (mine === searchGeneration && error.name !== 'AbortError') notice('search', 'Search failed: ' + error.message);
+    }
+  });
+  // Typing never calls the geocoder. Clearing also cancels pending results.
+  input.addEventListener('input', () => {
+    clear.hidden = !input.value;
+    if (!input.value) clearSearch();
+  });
+  function clearSearch() {
+    searchGeneration++;
+    if (searchController) searchController.abort();
+    input.value = '';
+    clear.hidden = true;
+    results.hidden = true;
+    searchPin.clearLayers();
+    notice('search', null);
+  }
+  clear.addEventListener('click', () => { clearSearch(); input.focus(); });
+  input.addEventListener('keydown', event => { if (event.key === 'Escape') results.hidden = true; });
+
+  const wrap = value => ((value + 180) % 360 + 360) % 360 - 180;
+  function viewport() {
+    const bounds = map.getBounds().pad(0.15);
+    const span = bounds.getEast() - bounds.getWest();
+    const south = Math.max(-85.05, bounds.getSouth());
+    const north = Math.min(85.05, bounds.getNorth());
+    const width = span * 60 * Math.cos((south + north) / 2 * Math.PI / 180);
+    if (span >= 360 || width > INTERACTIVE.max_span_nm || (north - south) * 60 > INTERACTIVE.max_span_nm) return null;
+    return [wrap(bounds.getWest()), south, wrap(bounds.getEast()), north];
+  }
+  function covers(outer, inner) {
+    const span = bbox => (bbox[2] - bbox[0] + 360) % 360;
+    const start = (inner[0] - outer[0] + 360) % 360;
+    return outer[1] <= inner[1] && outer[3] >= inner[3] && start + span(inner) <= span(outer) + 1e-7;
+  }
+  function restack() {
+    for (const [key] of OVERLAYS) if (layers[key] && map.hasLayer(layers[key])) layers[key].bringToFront();
+  }
+  function replaceLayer(key, features) {
+    layers[key].clearLayers();
+    layers[key].addData({ type: 'FeatureCollection', features });
+    if (key === 'laanc') {
+      ceilingCells.length = 0;
+      layers.laanc.eachLayer(cell => { if (cell.feature.properties._ceiling !== undefined) ceilingCells.push(cell); });
+      toggleCeilings();
+    }
+    restack();
+  }
+  const coverage = new Map();
+  let generation = 0;
+  let airspaceController;
+  async function refreshAirspace(bounds) {
+    const mine = ++generation;
+    if (airspaceController) airspaceController.abort();
+    airspaceController = new AbortController();
+    const signal = airspaceController.signal;
+    const jobs = OVERLAYS.map(([key]) => key).filter(key => !FIXED.includes(key) && key !== 'tfrs'
+      && map.hasLayer(layers[key]) && (!coverage.has(key)
+        || coverage.get(key).expires <= Date.now() || !covers(coverage.get(key).bbox, bounds)));
+    let next = 0;
+    async function worker() {
+      while (next < jobs.length && mine === generation) {
+        const key = jobs[next++];
+        loading++;
+        showStatus();
+        try {
+          const data = await request('airspace.json?layer=' + key + '&bbox=' + bounds.join(','), signal);
+          if (mine !== generation) return;
+          replaceLayer(key, data.features);
+          coverage.set(key, { bbox: data.bbox, expires: Date.parse(data.fetched_at) + INTERACTIVE.airspace_ttl * 1000 });
+          notice(key, null);
+        } catch (error) {
+          if (mine === generation && error.name !== 'AbortError') notice(key, key + ' failed; last layer retained: ' + error.message);
+        } finally {
+          loading--;
+          showStatus();
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
+  }
+
+  let tfrGeneration = 0;
+  let tfrController;
+  let tfrCoverage = null;
+  let tfrStatusAt = null;
+  let tfrTimer;
+  function scheduleTFRs(delay) {
+    clearTimeout(tfrTimer);
+    tfrTimer = setTimeout(() => {
+      const bounds = viewport();
+      if (bounds) refreshTFRs(bounds, true);
+    }, delay);
+  }
+  async function refreshTFRs(bounds, force = false) {
+    if (!map.hasLayer(layers.tfrs) || document.hidden) return;
+    if (!force && tfrCoverage && covers(tfrCoverage, bounds) && !notices.has('tfrs')
+        && (!tfrStatusAt || Date.now() < tfrStatusAt)
+        && Date.now() - Date.parse(tfrFetchedAt) < INTERACTIVE.tfr_ttl * 1000) return;
+    const mine = ++tfrGeneration;
+    if (tfrController) tfrController.abort();
+    clearTimeout(tfrTimer);
+    tfrController = new AbortController();
+    try {
+      const data = await request('tfrs.json?bbox=' + bounds.join(','), tfrController.signal);
+      if (mine !== tfrGeneration) return;
+      let features = data.features;
+      if (data.stale) {
+        // A partial refresh can add conservative restrictions, never erase
+        // an old one just because the source could not be refreshed.
+        const kept = new Map(layers.tfrs.toGeoJSON().features.map(f => [JSON.stringify(f.geometry), f]));
+        for (const feature of features) kept.set(JSON.stringify(feature.geometry), feature);
+        features = [...kept.values()];
+      }
+      replaceLayer('tfrs', features);
+      tfrCoverage = bounds;
+      tfrFetchedAt = data.fetched_at;
+      tfrStatusAt = data.next_change_at ? Date.parse(data.next_change_at) : null;
+      notice('tfrs', data.stale ? 'TFR data stale/incomplete; check NOTAMs. ' + data.warnings.join('; ') : null);
+      const deadline = Math.min(Date.parse(tfrFetchedAt) + INTERACTIVE.tfr_ttl * 1000,
+        data.next_change_at ? Date.parse(data.next_change_at) : Infinity);
+      const remaining = Math.min(INTERACTIVE.tfr_ttl * 1000, deadline - Date.now());
+      scheduleTFRs(data.stale ? 30 * 1000 : Math.max(1000, remaining));
+      showStatus();
+    } catch (error) {
+      if (mine === tfrGeneration && error.name !== 'AbortError') {
+        notice('tfrs', 'TFR refresh failed; last layer retained. Check NOTAMs. ' + error.message);
+        scheduleTFRs(30 * 1000);
+      }
+    }
+  }
+  function refresh(force = false) {
+    const bounds = viewport();
+    if (!bounds) {
+      generation++;
+      tfrGeneration++;
+      if (airspaceController) airspaceController.abort();
+      if (tfrController) tfrController.abort();
+      notice('view', 'Zoom in to load current airspace/TFRs (views up to ' + INTERACTIVE.max_span_nm + ' NM across)');
+      return;
+    }
+    notice('view', null);
+    refreshAirspace(bounds);
+    refreshTFRs(bounds, force);
+  }
+  let debounce;
+  map.on('moveend overlayadd', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => refresh(), 250);
+  });
+  // Ordinary airspace expires after six hours even if the view never moves.
+  // Check TFR age more often than the refresh interval so a cache hit in a
+  // second tab cannot postpone a fifteen-minute refresh by another fifteen minutes.
+  setInterval(() => { if (!document.hidden) refresh(); }, 30 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  refresh();
+}
+
 fetch('data.json')
   .then(r => r.json())
   .then(data => {
     for (const [key, label] of OVERLAYS) {
       const features = data.features.filter(f => (f.properties || {})._layer === key);
-      if (!features.length && !ALWAYS_LISTED.includes(key)) continue;
+      if (!features.length && !ALWAYS_LISTED.includes(key) && !INTERACTIVE) continue;
       const passive = PASSIVE.includes(key);
       layers[key] = L.geoJSON({ type: 'FeatureCollection', features }, {
         style: styleFor, pointToLayer: markerFor,
@@ -600,14 +1073,7 @@ fetch('data.json')
       }).addTo(map);
     }
     const panel = OVERLAYS.filter(([key]) => layers[key] && !FIXED.includes(key));
-    for (const [key, before] of PANEL_MOVES) {
-      const from = panel.findIndex(([k]) => k === key);
-      if (from === -1) continue;
-      const [entry] = panel.splice(from, 1);
-      const to = panel.findIndex(([k]) => k === before);
-      panel.splice(to === -1 ? from : to, 0, entry);
-    }
-    for (const [key, label] of panel) control.addOverlay(layers[key], esc(label));
+    for (const [key, label] of panel) control.addOverlay(layers[key], label, key);
     const bounds = layers.radius && layers.radius.getBounds();
     if (bounds && bounds.isValid()) {
       map.fitBounds(bounds, { padding: [20, 20] });
@@ -615,6 +1081,7 @@ fetch('data.json')
       map.setView(CENTER, 12);
     }
     toggleCeilings();
+    if (INTERACTIVE) startInteractiveMap();
   })
   .catch(err => console.error('drones.py: failed to load data.json', err));
 </script>
@@ -853,11 +1320,13 @@ class FAAClient:
         lng: float,
         radius_nm: float = 0.0,
         geometry: bool = False,
+        bounds: tuple[float, float, float, float] | None = None,
     ) -> list:
         """
         Features of one FAA layer at a point, or within radius_nm of it.
 
         Returns GeoJSON features; geometry is only fetched when asked for.
+        query_envelope() supplies bounds instead of a point for interactive maps.
         Pages through results past the service's record limit.
         """
         spec = LAYERS[layer]
@@ -874,6 +1343,14 @@ class FAAClient:
             "orderByFields": "OBJECTID",
             "f": "geojson",
         }
+        if bounds is not None:
+            west, south, east, north = bounds
+            params.update(
+                geometry=json.dumps({"xmin": west, "ymin": south, "xmax": east,
+                                     "ymax": north, "spatialReference": {"wkid": 4326}}),
+                geometryType="esriGeometryEnvelope",
+                outFields=",".join(["OBJECTID", *spec["fields"]]),
+            )
         if radius_nm > 0:
             params["distance"] = radius_nm
             params["units"] = "esriSRUnit_NauticalMile"
@@ -900,6 +1377,10 @@ class FAAClient:
             feature["properties"] = feature.get("properties") or {}
             feature.setdefault("geometry", None)
         return features
+
+    def query_envelope(self, layer: str, bounds: tuple) -> list:
+        """Features intersecting a WGS84 west/south/east/north envelope."""
+        return self.query(layer, 0, 0, geometry=True, bounds=bounds)
 
     def tfrs(self) -> list:
         """Every published TFR shape nationwide (active and scheduled), as GeoJSON."""
@@ -2265,9 +2746,10 @@ def _altitudes(entry: dict) -> Optional[str]:
     return None
 
 
-def map_features(location: dict, data: dict, radius_nm: float) -> list:
-    """Styled GeoJSON features for the map, tagged with their overlay in _layer."""
+def map_layer_features(location: dict, data: dict) -> list:
+    """Style thematic layers without adding a snapshot's center or radius."""
     lat, lng = location["latitude"], location["longitude"]
+    data = {key: data.get(key, []) for key in [*LAYERS, "tfrs"]}
     features = []
 
     for f in data["laanc"]:
@@ -2363,6 +2845,13 @@ def map_features(location: dict, data: dict, radius_nm: float) -> list:
             "stroke-width": 0,
         }))
 
+    return features
+
+
+def map_features(location: dict, data: dict, radius_nm: float) -> list:
+    """Styled snapshot layers, followed by the fixed search radius and center."""
+    lat, lng = location["latitude"], location["longitude"]
+    features = map_layer_features(location, data)
     features.append(_feature(
         {"type": "Polygon", "coordinates": [circle_ring(lat, lng, radius_nm)]},
         {"_layer": "radius", "title": f"{radius_nm:g} NM radius",
@@ -2379,7 +2868,7 @@ def map_features(location: dict, data: dict, radius_nm: float) -> list:
 
 
 def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
-             adsb: bool = False, radar: bool = False) -> str:
+             adsb: bool = False, radar: bool = False, interactive: bool = False) -> str:
     """
     Fill the Leaflet page template.
 
@@ -2389,7 +2878,8 @@ def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
     the resize uncovers; a fixed-size map loads every tile up front.
 
     adsb and radar add the live layers, which the page polls from the local
-    server's traffic.json and radar.json.
+    server's traffic.json and radar.json. interactive enables viewport loading,
+    TFR refresh and search; it stays off for fixed-area PNGs.
     """
     traffic_config = {
         "attribution": ADSBFI_ATTRIBUTION,
@@ -2410,14 +2900,17 @@ def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
             .replace("__TITLE__", _html_escape(location["query"]))
             .replace("__CENTER__", json.dumps([location["latitude"], location["longitude"]]))
             .replace("__OVERLAYS__", json.dumps(MAP_OVERLAYS))
-            .replace("__PANEL_MOVES__", json.dumps(PANEL_MOVES))
             .replace("__ALWAYS_LISTED__", json.dumps(ALWAYS_LISTED))
             .replace("__BASEMAPS__", json.dumps(TILE_LAYERS))
             .replace("__DEFAULT_BASEMAP__", json.dumps(tiles))
             .replace("__PASSIVE__", json.dumps(PASSIVE_OVERLAYS))
             .replace("__FIXED__", json.dumps(FIXED_OVERLAYS))
             .replace("__TRAFFIC__", json.dumps(traffic_config))
-            .replace("__RADAR__", json.dumps(radar_config)))
+            .replace("__RADAR__", json.dumps(radar_config))
+            .replace("__INTERACTIVE__", json.dumps({
+                "airspace_ttl": MAP_AIRSPACE_TTL, "tfr_ttl": MAP_TFR_TTL,
+                "max_span_nm": MAP_MAX_SPAN_NM,
+            } if interactive else None)))
 
 
 def _html_escape(text: str) -> str:
@@ -2440,6 +2933,252 @@ class _MapServer(http.server.ThreadingHTTPServer):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
+
+
+class MapCache:
+    """Bounded server-lifetime cache; identical concurrent misses share one request."""
+
+    def __init__(self, max_entries: int = MAP_CACHE_ENTRIES, clock=None, now=None):
+        self.max_entries = max_entries
+        self.clock = clock or time.monotonic
+        self.now = now or (lambda: datetime.now(timezone.utc))
+        self._entries = OrderedDict()
+        self._pending = {}
+        self._lock = threading.Lock()
+
+    def get(self, key, ttl: float, factory, stale: bool = False) -> dict:
+        with self._lock:
+            previous = self._entries.get(key)
+            if previous and previous[0] > self.clock():
+                self._entries.move_to_end(key)
+                return {**previous[1], "stale": False}
+            future = self._pending.get(key)
+            owner = future is None
+            if owner:
+                future = Future()
+                self._pending[key] = future
+        if not owner:
+            return future.result()
+        try:
+            result = {"value": factory(), "fetched_at": self.now().isoformat(), "stale": False}
+            with self._lock:
+                self._entries[key] = (self.clock() + ttl, result)
+                self._entries.move_to_end(key)
+                while len(self._entries) > self.max_entries:
+                    self._entries.popitem(last=False)
+            future.set_result(result)
+            return result
+        except Exception as error:
+            if stale and previous and isinstance(error, DronesError):
+                result = {**previous[1], "stale": True, "warning": str(error)}
+                future.set_result(result)
+                return result
+            future.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                self._pending.pop(key, None)
+
+
+def _bbox_parts(bounds: tuple) -> list:
+    """Ordinary envelopes making up a view, including one crossing the dateline."""
+    west, south, east, north = bounds
+    if west < east:
+        return [bounds]
+    return [(west, south, 180.0, north), (-180.0, south, east, north)]
+
+
+def _bbox_center(bounds: tuple) -> tuple:
+    west, south, east, north = bounds
+    span = (east - west) % 360
+    return (south + north) / 2, (west + span / 2 + 180) % 360 - 180
+
+
+def _map_bbox(query: dict) -> tuple:
+    """Validate regional viewport bounds before any upstream request."""
+    try:
+        values = tuple(float(v) for v in query["bbox"][0].split(","))
+    except (KeyError, ValueError, IndexError):
+        raise ValueError("bbox must be west,south,east,north") from None
+    if len(values) != 4 or not all(math.isfinite(v) for v in values):
+        raise ValueError("bbox must contain four finite coordinates")
+    west, south, east, north = values
+    if not (-180 <= west <= 180 and -180 <= east <= 180 and -85.05 <= south < north <= 85.05):
+        raise ValueError("bbox coordinates are out of range")
+    lat, _ = _bbox_center(values)
+    span = (east - west) % 360
+    if not span or max(span * 60 * math.cos(math.radians(lat)), (north - south) * 60) > MAP_MAX_SPAN_NM:
+        raise ValueError(f"Zoom in: airspace views must be at most {MAP_MAX_SPAN_NM} NM across")
+    return values
+
+
+def _map_envelope(bounds: tuple, padding_nm: float = 0) -> tuple:
+    """Round actual queried bounds outward, so cache keys never understate coverage."""
+    west, south, east, north = bounds
+    lat, _ = _bbox_center(bounds)
+    dy = padding_nm / 60
+    dx = dy / max(0.01, math.cos(math.radians(lat)))
+    span = (east - west) % 360
+    west -= dx
+    east = west + span + 2 * dx
+    grid = MAP_BBOX_GRID
+    west = math.floor(west / grid) * grid
+    east = math.ceil(east / grid) * grid
+    return (round((west + 180) % 360 - 180, 5),
+            max(-85.05, round(math.floor((south - dy) / grid) * grid, 5)),
+            round((east + 180) % 360 - 180, 5),
+            min(85.05, round(math.ceil((north + dy) / grid) * grid, 5)))
+
+
+def _geometry_intersects_bbox(geometry: dict | None, bounds: tuple) -> bool:
+    """Conservative shape-envelope intersection; holes cannot hide a restriction."""
+    points = []
+
+    def collect(coords):
+        if not coords:
+            return
+        if isinstance(coords[0], (int, float)):
+            points.append(coords[:2])
+        else:
+            for part in coords:
+                collect(part)
+
+    collect((geometry or {}).get("coordinates", []))
+    if not points:
+        return False
+    west, east = min(p[0] for p in points), max(p[0] for p in points)
+    south, north = min(p[1] for p in points), max(p[1] for p in points)
+    # A dateline-spanning polygon's coordinate extrema are misleading. Include
+    # extra shapes rather than omit a restriction at that edge of the US.
+    if east - west > 180:
+        west, east = -180, 180
+    return any(west <= e and east >= w and south <= n and north >= s
+               for w, s, e, n in _bbox_parts(bounds))
+
+
+class MapData:
+    """Interactive routes with shared caches and bounded FAA/geocoder traffic."""
+
+    def __init__(self, location: dict, faa=None, locator=None, cache=None, now=None):
+        self.location = location
+        self.cache = cache or MapCache()
+        self.now = now or (lambda: datetime.now(timezone.utc))
+        self._faa = faa
+        self._clients = threading.local()
+        self._slots = threading.BoundedSemaphore(MAX_PARALLEL_QUERIES)
+        self.locator = locator or Locator()
+        self._search_lock = threading.Lock()
+
+    def _fetch(self, method: str, *args):
+        # requests.Session isn't shared between request threads. The semaphore
+        # is shared, so overlapping tabs still make at most four FAA requests.
+        if self._faa is None and not hasattr(self._clients, "faa"):
+            self._clients.faa = FAAClient()
+        client = self._faa if self._faa is not None else self._clients.faa
+        with self._slots:
+            return getattr(client, method)(*args)
+
+    def airspace(self, query: dict) -> dict:
+        layer = query.get("layer", [""])[0]
+        if layer not in LAYERS:
+            raise ValueError("Unknown airspace layer")
+        bounds = _map_envelope(_map_bbox(query))
+
+        def load():
+            search = _map_envelope(bounds, STADIUM_TFR_NM) if layer == "stadiums" else bounds
+            features = []
+            seen = set()
+            for part in _bbox_parts(search):
+                for feature in self._fetch("query_envelope", layer, part):
+                    identity = feature.get("id", feature["properties"].get("OBJECTID"))
+                    if identity is None:
+                        identity = json.dumps(feature, sort_keys=True)
+                    if identity not in seen:
+                        seen.add(identity)
+                        features.append(feature)
+            return features
+
+        entry = self.cache.get(("airspace", layer, bounds), MAP_AIRSPACE_TTL, load)
+        styled = map_layer_features(self.location, {layer: entry["value"]})
+        if layer == "airports":
+            for feature in styled:
+                props = feature["properties"]
+                props["Distance from launch"] = props.pop("Distance")
+        return {"type": "FeatureCollection", "features": styled, "bbox": bounds,
+                "fetched_at": entry["fetched_at"]}
+
+    def tfrs(self, query: dict) -> dict:
+        bounds = _map_bbox(query)
+        lat, lng = _bbox_center(bounds)
+        shapes = self.cache.get("tfr-shapes", MAP_TFR_TTL,
+                                lambda: self._fetch("tfrs"), stale=True)
+        warnings = [shapes["warning"]] if shapes.get("warning") else []
+        relevant = [f for f in shapes["value"]
+                    if _geometry_intersects_bbox(f.get("geometry"), bounds)
+                    or (distance_nm(f.get("geometry"), lat, lng) or 0) <= TFR_REACH_NM]
+        notams = sorted({f["properties"].get("notam") for f in relevant} - {None})
+
+        def details(notam):
+            try:
+                entry = self.cache.get(("tfr-details", notam), MAP_TFR_TTL,
+                                       lambda: self._fetch("tfr_details", notam), stale=True)
+                return notam, entry
+            except DronesError as error:
+                return notam, {"value": None, "stale": True, "warning": str(error)}
+
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_QUERIES) as pool:
+            entries = dict(pool.map(details, notams))
+        stale = shapes["stale"] or any(e["stale"] for e in entries.values())
+        warnings.extend(f"NOTAM {n}: {e['warning']}" for n, e in entries.items() if e.get("warning"))
+        annotated = []
+        transitions = []
+        when = self.now()
+        for feature in relevant:
+            props = dict(feature["properties"])
+            entry = entries.get(props.get("notam"), {})
+            found = entry.get("value") if not (shapes["stale"] or entry.get("stale")) else None
+            props["status"] = tfr_status(found, when)
+            if props["status"] == "expired":
+                continue
+            if found:
+                transitions.extend(moment for moment in (found["begins"], found["ends"])
+                                   if moment and moment > when)
+                props.update(begins=found["begins"].isoformat() if found["begins"] else None,
+                             ends=found["ends"].isoformat() if found["ends"] else None,
+                             floor=found["floor"], ceiling=found["ceiling"])
+            annotated.append({**feature, "properties": props})
+        fetched_at = min([shapes["fetched_at"],
+                          *(e["fetched_at"] for e in entries.values() if e.get("fetched_at"))])
+        return {"type": "FeatureCollection",
+                "features": map_layer_features(self.location, {"tfrs": annotated}),
+                "fetched_at": fetched_at, "stale": stale,
+                "next_change_at": min(transitions).isoformat() if transitions else None,
+                "warnings": warnings}
+
+    def search(self, query: dict) -> dict:
+        text = " ".join(query.get("q", [""])[0].split())
+        if not 1 <= len(text) <= 200:
+            raise ValueError("Search must be 1-200 characters")
+        try:
+            coordinates = self.locator.parse_coordinates(text)
+        except DronesError as error:
+            raise ValueError(str(error)) from error
+        if coordinates:
+            lat, lng = coordinates
+            return {"results": [{"name": f"{lat:.5f}, {lng:.5f}", "lat": lat, "lng": lng}]}
+
+        def load():
+            with self._search_lock:
+                # One shared Locator owns the forward/reverse pacing clock;
+                # no autocomplete or hard geographic bounds on the query.
+                found = self.locator.geocode(text)
+            if not found:
+                return []
+            return [{"name": f["address"], "lat": f["latitude"], "lng": f["longitude"]}
+                    for f in [found, *found.get("alternatives", [])]][:CANDIDATE_LIMIT]
+
+        entry = self.cache.get(("search", text.lower()), MAP_SEARCH_TTL, load)
+        return {"results": entry["value"]}
 
 
 def _traffic_route(client: TrafficClient):
@@ -2494,20 +3233,23 @@ def _map_server(page: str, data: dict, port: int,
             try:
                 body = json.dumps(route(urllib.parse.parse_qs(query))).encode()
             except ValueError as e:
-                self.send_error(400, str(e))
+                self._send("application/json", json.dumps({"detail": str(e)}).encode(), 400)
                 return
             except DronesError as e:
-                self.send_error(502, str(e))
+                self._send("application/json", json.dumps({"detail": str(e)}).encode(), 502)
                 return
             self._send("application/json", body)
 
-        def _send(self, content_type: str, body: bytes):
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+        def _send(self, content_type: str, body: bytes, status: int = 200):
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # panning/searching cancels obsolete browser requests
 
         def log_message(self, *args):
             pass  # keep the terminal readable
@@ -2972,7 +3714,11 @@ def cmd_map(args: argparse.Namespace) -> int:
             saved = screenshot_map(page, collection, args.png, args.size, live=live)
             print(f"\n  Saved map to {saved}\n")
             return 0
-        return serve_map(map_page(location, args.tiles, adsb=args.adsb, radar=args.radar),
+        source = MapData(location)
+        live.update({"/airspace.json": source.airspace, "/tfrs.json": source.tfrs,
+                     "/search.json": source.search})
+        return serve_map(map_page(location, args.tiles, adsb=args.adsb, radar=args.radar,
+                                  interactive=True),
                          collection, args.port, not args.no_open, live=live)
     except DronesError as e:
         return _fail(str(e))
