@@ -71,7 +71,8 @@ one page usually covers it, but busier areas can exceed one.
 
 **Throttling:** ArcGIS Online rate limits bursts, either with HTTP 429 or with a 200 whose body
 is an error mentioning "Too many requests". drones.py runs at most 4 layer queries at once and
-retries after 2, 5 and 10 seconds before giving up. Back-to-back heavy radius queries (a dense
+retries after 2, 5 and 10 seconds before giving up. The same backoff handles ArcGIS's transient
+"Unable to perform query" errors. Back-to-back heavy radius queries (a dense
 LAANC grid such as downtown DC) can still trip it; waiting a minute clears it.
 
 ### Field notes

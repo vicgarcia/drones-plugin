@@ -832,7 +832,9 @@ class FAAClient:
                     response.raise_for_status()
                     data = response.json()
                     error = data.get("error") if isinstance(data, dict) else None
-                    throttled = "too many requests" in json.dumps(error or "").lower()
+                    message = json.dumps(error or "").lower()
+                    throttled = "too many requests" in message or (
+                        url.startswith(FAA_SERVICES) and "unable to perform query" in message)
                     if not throttled:
                         return data
             except requests.RequestException as e:
