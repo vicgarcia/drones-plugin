@@ -22,11 +22,14 @@ jobs:
       - name: Create release zip
         run: |
           zip -r drones-v${{ steps.version.outputs.version }}.zip .claude-plugin/plugin.json skills/drones/SKILL.md skills/drones/scripts/drones.py
+          cd skills && zip -r ../drones-skill-v${{ steps.version.outputs.version }}.zip drones/SKILL.md drones/scripts/drones.py
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
-          files: drones-v${{ steps.version.outputs.version }}.zip
+          files: |
+            drones-v${{ steps.version.outputs.version }}.zip
+            drones-skill-v${{ steps.version.outputs.version }}.zip
           generate_release_notes: true

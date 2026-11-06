@@ -42,7 +42,7 @@ chmod +x ~/.local/bin/drones.py
 
 The repo is a plugin marketplace with one plugin, `drones`.
 
-- **Cowork / Claude Desktop:** Customize > Plugins > Add > Add marketplace, enter `vicgarcia/drones.py`, then add the `drones` plugin. Or download `drones-v*.zip` from [Releases](https://github.com/vicgarcia/drones.py/releases) and upload it as a custom plugin.
+- **Cowork / Claude Desktop:** Customize > Plugins > Add > Add marketplace, enter `vicgarcia/drones.py`, then add the `drones` plugin. Or download `drones-v*.zip` from [Releases](https://github.com/vicgarcia/drones.py/releases) and upload it as a custom plugin, or upload `drones-skill-v*.zip` under Customize > Skills to add just the skill.
 - **Claude Code:** `/plugin marketplace add vicgarcia/drones.py`, then `/plugin install drones@drones-py`.
 
 The skill runs the script with `uv run --script`, so the environment needs uv and network access to PyPI (for the dependencies) and the data services: `services6.arcgis.com`, `tfr.faa.gov`, `aviationweather.gov` and `nominatim.openstreetmap.org`, plus `opendata.adsb.fi` and `opengeo.ncep.noaa.gov` for the live map. Cowork's sandbox allows package managers by default, but not these: add them under Settings > Capabilities (on Team and Enterprise, the organization's network egress allowlist), then start a new session. The interactive map needs a local machine with a browser. In a sandbox, Claude answers from `airspace` and `nearby` instead.
