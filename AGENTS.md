@@ -26,7 +26,7 @@ return, and the decisions behind the defaults.
 
 - `uv run --script skills/drones/scripts/drones.py --help`: run the CLI from the repo
 - `uv run --with 'geopy>=2.4.0' --with 'requests>=2.31.0' python -m unittest discover -s tests -v`:
-  offline suite (95 tests, 7 skipped browser tests)
+  offline suite (100 tests, 7 skipped browser tests)
 - `DRONES_BROWSER_TESTS=1 uv run --with geopy --with requests --with playwright python -m unittest discover -s tests -p test_map_browser.py -v`:
   browser tests; needs an installed Chrome/Edge/Chromium and downloads only the pinned Leaflet assets
 - `claude plugin validate .`: check the plugin and marketplace manifests

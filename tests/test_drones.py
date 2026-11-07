@@ -74,6 +74,64 @@ class LocationTests(OfflineCase):
         self.assertIsNone(location["address"])
 
 
+
+SPRINGFIELD = {
+    "latitude": 39.8, "longitude": -89.64, "address": "Springfield, Illinois",
+    "alternatives": [
+        {"latitude": 42.1, "longitude": -72.59, "address": "Springfield, Massachusetts",
+         "type": "administrative", "class": "boundary", "importance": 0.61},
+        {"latitude": 37.2, "longitude": -93.29, "address": "Springfield, Missouri",
+         "type": "administrative", "class": "boundary", "importance": 0.6},
+    ],
+    "raw": {"type": "city", "class": "place", "addresstype": "city", "importance": 0.62},
+}
+
+
+class GeocodeTests(OfflineCase):
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                patch.object(drones, "utf8_output"), patch.object(drones, "Nominatim"):
+            code = drones.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_json_lists_requested_candidates(self):
+        with patch.object(drones.Locator, "geocode", return_value=SPRINGFIELD) as geocode:
+            code, out, err = self.run_cli("geocode", "Springfield", "--limit", "2", "--json")
+        self.assertEqual(code, 0)
+        result = json.loads(out)
+        self.assertEqual((result["type"], result["class"]), ("city", "place"))
+        self.assertEqual([a["address"] for a in result["alternatives"]], ["Springfield, Massachusetts"])
+        self.assertEqual(result["maps_url"], "https://www.google.com/maps?q=39.8,-89.64")
+        self.assertEqual(geocode.call_args.kwargs["limit"], drones.CANDIDATE_LIMIT)
+        self.assertIn("ambiguous", err)
+
+    def test_expect_type_mismatch_fails(self):
+        with patch.object(drones.Locator, "geocode", return_value=SPRINGFIELD):
+            code, out, err = self.run_cli("geocode", "Springfield", "--expect-type", "park,beach")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("expected beach/park but matched city/place", err)
+
+    def test_near_bounds_the_search(self):
+        with patch.object(drones.Locator, "geocode", return_value=None) as geocode:
+            code, _, err = self.run_cli("geocode", "Main St", "--near", "41.79,-87.74", "--within", "5")
+        self.assertEqual(code, 1)
+        self.assertIsNotNone(geocode.call_args.kwargs["viewbox"])
+        self.assertIn("within 5.0 miles of 41.79,-87.74", err)
+
+    def test_coordinates_reverse_geocode(self):
+        with patch.object(drones.Locator, "reverse", return_value="Midway Airport") as reverse, \
+                patch.object(drones.Locator, "geocode", side_effect=AssertionError("no geocode")):
+            code, out, _ = self.run_cli("geocode", "-33.86,151.21", "--json")
+        self.assertEqual(code, 0)
+        reverse.assert_called_once_with(-33.86, 151.21)
+        self.assertEqual(json.loads(out)["address"], "Midway Airport")
+
+    def test_limit_must_be_positive(self):
+        code, _, err = self.run_cli("geocode", "x", "--limit", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("--limit", err)
+
 class GeometryTests(OfflineCase):
     def test_contains_honours_holes(self):
         self.assertTrue(drones.contains(SQUARE, 41.5, -87.5))

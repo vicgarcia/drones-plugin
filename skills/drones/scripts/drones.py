@@ -143,6 +143,10 @@ Examples:
   drones.py preflight "Hollywood Beach, FL" --at "tomorrow 7am" --max-wind 15
   drones.py preflight 41.79,-87.74 --at 2pm --altitude 200 --json
 
+  drones.py geocode "Springfield" --limit 5
+  drones.py geocode "Montrose Beach" --near "Chicago, IL" --expect-type beach
+  drones.py geocode 41.79,-87.74
+
 Location:
   Every command takes a place name, address or raw coordinates:
     "41.79,-87.74"         Raw lat,lng (comma or space separated)
@@ -1138,12 +1142,7 @@ class Locator:
                     pass  # a name is nice to have, the coordinates are what matter
             return {"query": location, "latitude": lat, "longitude": lng, "address": address}
 
-        viewbox = None
-        if near:
-            anchor = self.locate(near, lookup_address=False)
-            viewbox = viewbox_around(anchor["latitude"], anchor["longitude"],
-                                     within_miles * 1.60934)
-
+        viewbox = self.viewbox_near(near, within_miles) if near else None
         result = self.geocode(location, viewbox=viewbox)
         if not result:
             if near:
@@ -1155,13 +1154,19 @@ class Locator:
         return {"query": location, "latitude": result["latitude"],
                 "longitude": result["longitude"], "address": result["address"]}
 
-    def geocode(self, address: str, viewbox: Optional[list] = None) -> Optional[dict]:
+    def viewbox_near(self, near: str, within_miles: float) -> list:
+        """The --near search box: within_miles around another location."""
+        anchor = self.locate(near, lookup_address=False)
+        return viewbox_around(anchor["latitude"], anchor["longitude"], within_miles * 1.60934)
+
+    def geocode(self, address: str, viewbox: Optional[list] = None,
+                limit: int = CANDIDATE_LIMIT) -> Optional[dict]:
         """
         Geocode a place name. Runners-up come back under "alternatives" so the
         caller can tell whether the query was ambiguous.
         """
         try:
-            kwargs = {"addressdetails": True, "exactly_one": False, "limit": CANDIDATE_LIMIT}
+            kwargs = {"addressdetails": True, "exactly_one": False, "limit": limit}
             if viewbox:
                 kwargs["viewbox"] = viewbox
                 kwargs["bounded"] = True
@@ -1181,6 +1186,7 @@ class Locator:
                         "longitude": alt.longitude,
                         "address": alt.address,
                         "type": alt.raw.get("type"),
+                        "class": alt.raw.get("class"),
                         "importance": float(alt.raw.get("importance") or 0),
                     }
                     for alt in runners_up
@@ -1245,7 +1251,14 @@ def _warn_if_ambiguous(result: dict, query: str) -> None:
     print(f"Warning: '{query}' is ambiguous - two close matches", file=sys.stderr)
     print(f"  using:   {result['address']}", file=sys.stderr)
     print(f"  also:    {alt['address']} ({alt['type']})", file=sys.stderr)
-    print("  narrow the query, or use --near to constrain it", file=sys.stderr)
+    print("  narrow the query, use --near to constrain it, or run geocode --limit 5 "
+          "to list candidates", file=sys.stderr)
+
+
+def place_kinds(raw: dict) -> set:
+    """Nominatim's own classification of what kind of place matched."""
+    return {str(raw.get(key)).lower() for key in ("type", "class", "addresstype")
+            if raw.get(key)}
 
 
 # ============================================================================
@@ -3501,6 +3514,21 @@ def print_preflight(location: dict, report: dict, args) -> None:
     print()
 
 
+def print_geocode(location: dict) -> None:
+    _header("Geocode", location)
+    if location.get("type"):
+        print(f"  Type:       {location['type']} ({location['class']})")
+    print(f"  Map:        {location['maps_url']}")
+    others = location.get("alternatives") or []
+    if others:
+        print("\n  Other matches:")
+        for number, alt in enumerate(others, start=2):
+            print(_wrap(alt["address"], "       ").replace("       ", f"    {number}. ", 1))
+            print(f"       {alt['type'] or '?'}, importance {alt['importance']:.3f}"
+                  f"  ({alt['latitude']:.5f}, {alt['longitude']:.5f})")
+    print()
+
+
 def print_stations(stations: list, location: dict, radius_nm: float) -> None:
     print(f"\n  Weather stations within {radius_nm:g} NM of {location['query']}")
     print("  " + "=" * 58)
@@ -3540,6 +3568,53 @@ def cmd_airspace(args: argparse.Namespace) -> int:
             print(json.dumps({"location": location, **report}, indent=2))
         else:
             print_check(location, report)
+        return 0
+    except DronesError as e:
+        return _fail(str(e))
+
+
+def cmd_geocode(args: argparse.Namespace) -> int:
+    """Coordinates for a place name, or the address at raw coordinates."""
+    try:
+        if args.limit < 1:
+            raise DronesError("--limit must be at least 1")
+        locator = Locator()
+        coordinates = locator.parse_coordinates(args.location)
+        if coordinates:
+            lat, lng = coordinates
+            address = locator.reverse(lat, lng)
+            if not address:
+                raise DronesError(f"No address found at {lat}, {lng}")
+            location = {"query": args.location, "latitude": lat, "longitude": lng,
+                        "address": address, "maps_url": _maps_url(lat, lng)}
+        else:
+            viewbox = locator.viewbox_near(args.near, args.within) if args.near else None
+            found = locator.geocode(args.location, viewbox=viewbox,
+                                    limit=max(CANDIDATE_LIMIT, args.limit))
+            if not found:
+                if args.near:
+                    raise DronesError(f"No results for '{args.location}' within "
+                                      f"{args.within} miles of {args.near}")
+                raise DronesError(f"Could not geocode: {args.location}")
+            _warn_if_ambiguous(found, args.location)
+            raw = found["raw"]
+            if args.expect_type:
+                expected = {kind.strip().lower() for kind in args.expect_type.split(",")}
+                kinds = place_kinds(raw)
+                if not expected & kinds:
+                    raise DronesError(f"expected {'/'.join(sorted(expected))} but matched "
+                                      f"{'/'.join(sorted(kinds)) or 'nothing'}: {found['address']}")
+            location = {
+                "query": args.location, "latitude": found["latitude"],
+                "longitude": found["longitude"], "address": found["address"],
+                "type": raw.get("type"), "class": raw.get("class"),
+                "maps_url": _maps_url(found["latitude"], found["longitude"]),
+                "alternatives": found["alternatives"][:args.limit - 1],
+            }
+        if args.json:
+            print(json.dumps(location, indent=2))
+        else:
+            print_geocode(location)
         return 0
     except DronesError as e:
         return _fail(str(e))
@@ -3918,6 +3993,39 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="Only stations that issue TAFs")
     stations_parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
 
+    geocode_parser = subparsers.add_parser(
+        "geocode",
+        help="Coordinates for a place, or the address at coordinates",
+        description="Geocode a place or address with OpenStreetMap, or reverse geocode 'lat,lng'."
+    )
+    geocode_parser.add_argument(
+        "location",
+        help="Place, address or 'lat,lng' coordinates"
+    )
+    geocode_parser.add_argument(
+        "--near", "-n",
+        help="Constrain geocoding to the area around this location"
+    )
+    geocode_parser.add_argument(
+        "--within", "-w",
+        type=float,
+        default=25.0,
+        help="Radius in miles used by --near (default: 25)"
+    )
+    geocode_parser.add_argument(
+        "--limit", "-l",
+        type=int,
+        default=1,
+        help="Show this many candidate matches (default: 1)"
+    )
+    geocode_parser.add_argument(
+        "--expect-type",
+        metavar="TYPE",
+        help="Fail unless the match is one of these OSM types "
+             "(comma separated, e.g. 'park,beach')"
+    )
+    geocode_parser.add_argument("--json", "-j", action="store_true", help="Output as JSON")
+
     return parser
 
 
@@ -3935,6 +4043,7 @@ def main(argv: Optional[list] = None) -> int:
         "taf": cmd_taf,
         "stations": cmd_stations,
         "preflight": cmd_preflight,
+        "geocode": cmd_geocode,
     }
     handler = commands.get(args.command)
     if handler:

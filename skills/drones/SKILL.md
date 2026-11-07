@@ -222,6 +222,23 @@ Drone checks: wind and gusts against `--max-wind` (default 20 kt, or env `DRONES
 400 ft AGL), plus thunderstorms, cumulonimbus, precipitation and fog. ✓ ok · ⚠ watch · ✗ fails.
 Ask for the aircraft's wind limit when weather matters; 20 kt is only a default.
 
+### geocode - pin down a place
+```bash
+drones.py geocode "Springfield" --limit 5
+drones.py geocode "Montrose Beach" --near "Chicago, IL" --expect-type beach
+drones.py geocode 41.79,-87.74
+```
+Coordinates, address, OSM type and a Google Maps link for a place name, or the address at
+`lat,lng`. Use it when another command warns that a name is ambiguous, before running the real
+check with the right coordinates:
+- `--limit N` lists the runner-up matches; the right one is often second.
+- `--near`/`--within` (miles, default 25) bound the search, the reliable fix for street
+  addresses that match a same-named street in another town.
+- `--expect-type` (comma separated, checked against OSM's `type`, `class` and `addresstype`)
+  exits 1 instead of returning the wrong kind of place, e.g. `park`, `beach`, `aerodrome`,
+  `administrative`.
+- Don't judge a match by `importance` alone; it is near 0 for every street address.
+
 ## Output and errors
 
 - `--json` on every command except `map` (which has `--geojson`). Times in JSON are ISO

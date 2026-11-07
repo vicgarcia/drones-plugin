@@ -81,6 +81,7 @@ export DRONES_MAX_WIND=18
 | `metar` | What are conditions right now? |
 | `taf` | What is the forecast? |
 | `stations` | Which weather stations report near here? |
+| `geocode` | Where exactly is this place, or what address is at these coordinates? |
 
 Every command takes a place name, an address, or `lat,lng` coordinates. `metar` and `taf`
 also take station IDs (`KFLL`, or `KFLL,KMIA`).
@@ -288,6 +289,20 @@ the map, and neither affects `--geojson`. If their toggles are absent, the map w
 without those flags; use `--adsb --radar` to include both.
 
 Serves on `127.0.0.1`, falls back to a free port if 8765 is taken, and runs until Ctrl+C.
+
+### Geocode
+
+```bash
+drones.py geocode "Springfield" --limit 5
+drones.py geocode "Montrose Beach" --near "Chicago, IL" --expect-type beach
+drones.py geocode 41.79,-87.74 --json
+```
+
+`geocode` resolves a place the same way the other commands do and shows what it matched:
+coordinates, address, OSM type and a map link, or the address at raw coordinates. When a command
+warns that a name is ambiguous, `--limit N` lists the candidates, `--near`/`--within` bound the
+search to an area, and `--expect-type` (e.g. `park,beach`) exits 1 rather than accept the wrong
+kind of place.
 
 ## Data Sources
 
