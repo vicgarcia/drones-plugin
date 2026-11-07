@@ -207,6 +207,39 @@ category.
 3 SM visibility, and 500 ft below clouds at your `--altitude` (default 400 ft AGL), plus
 thunderstorms, cumulonimbus, precipitation and fog.
 
+| Part 107 rule | Weather field | Go when | Checked |
+|---|---|---|---|
+| 107.51(c): 3 SM visibility from the control station | visibility | `>= 3` SM | yes |
+| 107.51(d)(1): 500 ft below clouds | cloud bases (ft AGL) and planned altitude | lowest base `>= altitude + 500` | yes (`--altitude`) |
+| 107.51(d)(2): 2,000 ft horizontal from clouds | cloud cover | operator judgment | no |
+| 107.51(b): below 400 ft AGL | - | not weather driven | - |
+| 107.49(a)(2): aircraft capable of safe operation | wind, gusts | airframe specific | yes (`--max-wind`) |
+
+Broken or overcast layers below altitude + 500 ft fail; few or scattered ones warn (fly clear of
+them). Thunderstorms fail; cumulonimbus, precipitation and fog/mist/haze warn.
+
+Flight categories, where the worse of ceiling and visibility decides:
+
+| Category | Ceiling | Visibility |
+|---|---|---|
+| VFR | > 3,000 ft | > 5 SM |
+| MVFR (marginal VFR) | 1,000-3,000 ft | 3-5 SM |
+| IFR | 500-999 ft | 1-<3 SM |
+| LIFR (low IFR) | < 500 ft | < 1 SM |
+
+**Setting `--max-wind`:** manufacturer wind resistance ratings, not regulatory limits.
+
+| Airframe | Max sustained wind |
+|---|---|
+| DJI Mini 4 Pro | about 10.7 m/s (about 21 kt), "Level 5" |
+| DJI Air 3 | about 12 m/s (about 23 kt), "Level 6" |
+| DJI Mavic 3 | about 12 m/s (about 23 kt), "Level 6" |
+| DJI Matrice 350 RTK | about 12 m/s (about 23 kt), industrial |
+
+A common rule of thumb is no-go when gusts exceed 1.5x the airframe's sustained limit, since gust
+transients cause loss of control. drones.py instead compares the higher of wind and gust to one
+`--max-wind` and warns within 85% of it.
+
 ### Map
 
 ```bash
@@ -273,19 +306,63 @@ Serves on `127.0.0.1`, falls back to a free port if 8765 is taken, and runs unti
 | Geocoding | OpenStreetMap Nominatim |
 
 All free with no key. Nominatim allows 1 request a second (paced automatically), AWC about 100
-a minute. Not covered: NOTAMs other than TFRs (the FAA NOTAM API needs a key), LAANC filing
-(only approved suppliers can submit), real-time activation of NOTAM-activated airspace (shown
-as CAUTION), and airspace outside the US.
+a minute.
 
-> Advisory only - FAA data is not real time and is not an authorization to fly. Confirm with
-> B4UFLY or a LAANC app and check NOTAMs before you fly.
+> Advisory only - the FAA states that facility map data is not updated in real time, and relying
+> on it is neither an authorization to fly nor evidence of compliance. Confirm with B4UFLY or a
+> LAANC app and check NOTAMs before you fly.
 
-[WIKI.md](WIKI.md) is the development reference: every FAA layer and field, how TFR times are read,
-the AWC endpoints and JSON quirks, how stations are chosen, the live traffic and radar feeds, Part 107
-weather rules, how the skill's drone rules material was sourced and is kept current, and the
-reasoning behind the skill and map defaults.
+## Limitations
+
+**Not covered by drones.py:**
+
+- **Filing LAANC authorizations.** Only FAA-approved UAS Service Suppliers (Aloft, Airspace Link
+  and others) can submit requests, and their developer APIs are gated. drones.py reports
+  eligibility and ceilings and points you to a LAANC app.
+- **NOTAMs other than TFRs.** The FAA NOTAM API (`api.faa.gov`) requires a registered key.
+- **Real-time activation** of special use, national defense and part-time security airspace.
+  These go active by NOTAM, so drones.py flags them as CAUTION rather than deciding.
+- **Non-US airspace.** The FAA layers cover the US and its territories. Weather works anywhere AWC
+  has a station.
+
+**Not available from the weather data:**
+
+| Gap | Note |
+|---|---|
+| Wind at flight altitude | METARs measure about 10 m above the airport; wind at 400 ft AGL is often quite different |
+| Lightning detection | Commercial only (Vaisala, Earth Networks) |
+| Sub-hourly updates | Standard METARs are hourly, and SPECIs fire only on threshold changes |
+
+**Operational notes:**
+
+- **Density altitude** isn't in the METAR. It can be computed from temperature, altimeter and
+  station elevation, and matters for hot-and-high flights where heavy drones lose payload.
+- **Icing** matters only near the freezing level, mostly in winter.
+- **Outages:** AWC sometimes degrades or goes down. AVWX and CheckWX are secondary sources.
+- **Live traffic** comes from volunteer ADS-B receivers. Low aircraft far from a feeder, and
+  aircraft without ADS-B, are missing.
+
+## Sources
+
+- [FAA UAS Data Delivery System](https://udds-faa.opendata.arcgis.com/) and its
+  [service directory](https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/ArcGIS/rest/services?f=json)
+- [FAA TFR list](https://tfr.faa.gov/tfr3/)
+- [AviationWeather.gov API documentation](https://aviationweather.gov/data/api/) and the
+  [OpenAPI spec](https://aviationweather.gov/data/schema/openapi.yaml)
+- [Bulk station file](https://aviationweather.gov/data/cache/stations.cache.xml.gz)
+- [14 CFR Part 107, small UAS operating rules](https://www.ecfr.gov/current/title-14/chapter-I/subchapter-F/part-107)
+  and the [eCFR versioner API](https://www.ecfr.gov/developers/documentation/api/v1)
+- [FAA UAS pages](https://www.faa.gov/uas) and [AC 107-2A](https://www.faa.gov/documentLibrary/media/Advisory_Circular/AC_107-2A.pdf)
+- [adsb.fi open data API](https://github.com/adsbfi/opendata)
+- [NOAA MRMS](https://www.nssl.noaa.gov/projects/mrms/) and the
+  [MRMS base reflectivity WMS](https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows?service=WMS&request=GetCapabilities)
 
 ## Development
+
+[AGENTS.md](AGENTS.md) is the development reference: code layout, every FAA layer and field, how
+TFR times are read, the AWC endpoints and JSON quirks, how stations are chosen, the live traffic
+and radar feeds, how the skill's drone rules material was sourced and is kept current, and the
+reasoning behind the skill and map defaults.
 
 Run the offline regression suite (service calls are mocked, network access is refused):
 
