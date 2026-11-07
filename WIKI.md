@@ -1,4 +1,4 @@
-# drones.py wiki
+# drones-plugin wiki
 
 Reference notes behind drones.py: the data sources, what their fields mean, how the tool uses
 them, and what they do not cover. The README covers usage; this covers the details.
@@ -474,12 +474,14 @@ Decisions made while shaping how agents use drones.py, and why.
 - **One skill folder.** The skill is a single SKILL.md, including the FAA rules reference, beside
   the script in `skills/drones/`, so installing it is one plugin install or one folder copy.
 - **Plugin packaging.** The repo root is a Claude plugin (`.claude-plugin/plugin.json`) and a
-  one-plugin marketplace (`drones-py`). Keep SKILL.md in `skills/drones/`: at the root, Cowork
+  one-plugin marketplace (`drones-plugin`). Keep SKILL.md in `skills/drones/`: at the root, Cowork
   installs the skill without `scripts/`. SKILL.md runs `uv run --script
   ${CLAUDE_SKILL_DIR}/scripts/drones.py`, and its `allowed-tools` rule matches that exact command,
   so keep the two in sync. Cowork runs it in a cloud sandbox: PyPI is reachable by default, but
   the service domains in `compatibility` must be allowed, and nothing served on localhost reaches
-  the user. The release zip (`.github/workflows/release.yml`) is the same plugin, for upload.
+  the user. The release builds the same plugin as `drones-plugin-v*.zip`, and the skill alone
+  as `drones-skill-v*.zip`, for upload.
+- **Claude Desktop vs coding harnesses.** The plugin build targets Claude Desktop (including Cowork); coding harnesses such as Claude Code and pi run `drones.py` from PATH with the skill's invocation rewritten (see README Installation).
 
 ### Distances
 

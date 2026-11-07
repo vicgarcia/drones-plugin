@@ -1,7 +1,8 @@
-# drones.py
+# drones-plugin
 
-A Python CLI for drone pilots: FAA airspace for any place in the US, on the command line or an
-interactive map, with aviation weather, a go/no-go preflight and live air traffic when you want them.
+The `drones` agent skill and the `drones.py` CLI behind it, for drone pilots: FAA airspace for any
+place in the US, on the command line or an interactive map, with aviation weather, a go/no-go
+preflight and live air traffic when you want them.
 
 ![Airspace and air traffic around 4406 Fillmore St, Hollywood, FL](screenshot.png)
 
@@ -23,29 +24,44 @@ interactive map, with aviation weather, a go/no-go preflight and live air traffi
 
 ## Installation
 
-### Install for uv
+### Claude Desktop
 
-```bash
-# Clone the repo
-git clone https://github.com/vicgarcia/drones.py.git
-cd drones.py
+The plugin build is meant for Claude Desktop, including Cowork. The repo is a plugin marketplace
+with one plugin, `drones`.
 
-# Run (dependencies install on first run)
-uv run --script skills/drones/scripts/drones.py --help
-
-# Install in PATH
-cp skills/drones/scripts/drones.py ~/.local/bin/drones.py
-chmod +x ~/.local/bin/drones.py
-```
-
-### Install as a Claude plugin (Cowork, Claude Code)
-
-The repo is a plugin marketplace with one plugin, `drones`.
-
-- **Cowork / Claude Desktop:** Customize > Plugins > Add > Add marketplace, enter `vicgarcia/drones.py`, then add the `drones` plugin. Or download `drones-v*.zip` from [Releases](https://github.com/vicgarcia/drones.py/releases) and upload it as a custom plugin, or upload `drones-skill-v*.zip` under Customize > Skills to add just the skill.
-- **Claude Code:** `/plugin marketplace add vicgarcia/drones.py`, then `/plugin install drones@drones-py`.
+- Customize > Plugins > Add > Add marketplace, enter `vicgarcia/drones-plugin`, then add the `drones` plugin.
+- Or download `drones-plugin-v*.zip` from [Releases](https://github.com/vicgarcia/drones-plugin/releases) and upload it as a custom plugin, or upload `drones-skill-v*.zip` under Customize > Skills to add just the skill.
 
 The skill runs the script with `uv run --script`, so the environment needs uv and network access to PyPI (for the dependencies) and the data services: `services6.arcgis.com`, `tfr.faa.gov`, `aviationweather.gov` and `nominatim.openstreetmap.org`, plus `opendata.adsb.fi` and `opengeo.ncep.noaa.gov` for the live map. Cowork's sandbox allows package managers by default, but not these: add them under Settings > Capabilities (on Team and Enterprise, the organization's network egress allowlist), then start a new session. The interactive map needs a local machine with a browser. In a sandbox, Claude answers from `airspace` and `nearby` instead.
+
+### Coding harnesses (Claude Code, pi)
+
+In a coding harness, install `drones.py` as a command in your PATH and give the agent the skill.
+
+1. Install [uv](https://github.com/astral-sh/uv). The script's PEP 723 header declares its
+   dependencies, so uv installs them on first run; there is nothing else to set up.
+2. Copy the script into a directory in your PATH and make it executable:
+
+   ```bash
+   git clone https://github.com/vicgarcia/drones-plugin.git
+   cp drones-plugin/skills/drones/scripts/drones.py ~/.local/bin/drones.py
+   chmod +x ~/.local/bin/drones.py
+   drones.py --help
+   ```
+
+3. Copy the skill into your harness's skills directory (`~/.claude/skills/drones` for Claude Code,
+   `~/.pi/agent/skills/drones` for pi):
+
+   ```bash
+   mkdir -p ~/.claude/skills/drones
+   cp drones-plugin/skills/drones/SKILL.md ~/.claude/skills/drones/
+   ```
+
+4. As shipped, the skill runs `uv run --script ${CLAUDE_SKILL_DIR}/scripts/drones.py`, a path that
+   only exists inside the plugin. Ask your agent to switch it to the installed command:
+
+   > Update the drones skill in ~/.claude/skills/drones/SKILL.md to run `drones.py` from my PATH instead
+   > of `uv run --script ${CLAUDE_SKILL_DIR}/scripts/drones.py`, including its `allowed-tools` line.
 
 ## Configuration
 
@@ -296,15 +312,7 @@ each rule.
 
 ### Installation
 
-For Claude, install it as a plugin (see Installation). For other agents, copy that folder into
-their skills directory:
-
-```bash
-cp -r skills/drones /path/to/agent/skills/
-```
-
-`SKILL.md` runs the script as `uv run --script ${CLAUDE_SKILL_DIR}/scripts/drones.py`. Claude fills
-in `${CLAUDE_SKILL_DIR}`; for other agents, replace it with the skill directory's path.
+See [Installation](#installation): the plugin for Claude Desktop, or the script in your PATH plus `SKILL.md` for Claude Code, pi and other coding harnesses.
 
 ### Usage
 

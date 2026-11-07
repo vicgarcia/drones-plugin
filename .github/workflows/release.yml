@@ -21,7 +21,7 @@ jobs:
 
       - name: Create release zip
         run: |
-          zip -r drones-v${{ steps.version.outputs.version }}.zip .claude-plugin/plugin.json skills/drones/SKILL.md skills/drones/scripts/drones.py
+          zip -r drones-plugin-v${{ steps.version.outputs.version }}.zip .claude-plugin/plugin.json skills/drones/SKILL.md skills/drones/scripts/drones.py
           cd skills && zip -r ../drones-skill-v${{ steps.version.outputs.version }}.zip drones/SKILL.md drones/scripts/drones.py
 
       - name: Create release
@@ -30,6 +30,6 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
           files: |
-            drones-v${{ steps.version.outputs.version }}.zip
+            drones-plugin-v${{ steps.version.outputs.version }}.zip
             drones-skill-v${{ steps.version.outputs.version }}.zip
           generate_release_notes: true
