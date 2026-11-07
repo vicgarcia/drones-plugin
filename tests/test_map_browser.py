@@ -3,12 +3,14 @@
 DRONES_BROWSER_TESTS=1 uv run --with geopy --with requests --with playwright \
     python -m unittest discover -s tests -p test_map_browser.py -v
 
-Downloads only pinned Leaflet assets; uses an installed Chrome/Edge/Chromium.
+Downloads only pinned Leaflet assets; uses an installed Chrome/Edge/Chromium
+(set DRONES_BROWSER to its path if it isn't found).
 """
 import base64
 import importlib.util
 import json
 import os
+import shutil
 import unittest
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -21,6 +23,13 @@ SPEC = importlib.util.spec_from_file_location("drones_browser_test", Path(__file
 drones = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(drones)
 LOCATION = {"query": "Midway", "latitude": 41.79, "longitude": -87.74}
+BROWSERS = [
+    "chrome", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "msedge", "microsoft-edge",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+]
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=")
 
 
@@ -32,7 +41,8 @@ class MapBrowserTests(unittest.IsolatedAsyncioTestCase):
             import playwright.async_api  # noqa: F401
         except ImportError:
             raise unittest.SkipTest("install playwright for browser tests")
-        cls.browser_path = drones.find_browser()
+        cls.browser_path = os.environ.get("DRONES_BROWSER") or next(
+            filter(None, (shutil.which(name) for name in BROWSERS)), None)
         if not cls.browser_path:
             raise unittest.SkipTest("no installed Chromium-family browser")
         cls.assets = {}
@@ -57,7 +67,6 @@ class MapBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.held_search = None
         self.hold_class = False
         self.held_class = None
-        self.interactive = True
         self.adsb = False
         self.radar = False
         await self.page.route("**/*", self.route)
@@ -82,8 +91,7 @@ class MapBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.calls.append((url.path, query))
         data = {}
         if url.path == "/":
-            await route.fulfill(body=drones.map_page(LOCATION, "street", interactive=self.interactive,
-                                                   adsb=self.adsb, radar=self.radar),
+            await route.fulfill(body=drones.map_page(LOCATION, "street", adsb=self.adsb, radar=self.radar),
                                 content_type="text/html")
             return
         if url.path == "/data.json":
@@ -146,12 +154,9 @@ class MapBrowserTests(unittest.IsolatedAsyncioTestCase):
 
     async def open_map(self):
         await self.page.goto("http://127.0.0.1:8765/")
-        if self.interactive:
-            await self.page.wait_for_function("document.querySelector('.map-status') && "
-                                              "document.querySelector('.map-status').textContent.includes('TFR data:') && "
-                                              "!document.querySelector('.map-status').textContent.includes('Loading')")
-        else:
-            await self.page.wait_for_function("layers.radius !== undefined")
+        await self.page.wait_for_function("document.querySelector('.map-status') && "
+                                          "document.querySelector('.map-status').textContent.includes('TFR data:') && "
+                                          "!document.querySelector('.map-status').textContent.includes('Loading')")
 
     def count(self, path, layer=None):
         return sum(p == path and (layer is None or q.get("layer") == [layer]) for p, q in self.calls)
@@ -306,15 +311,6 @@ class MapBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(panel['x'] + panel['width'], 375)
         self.assertEqual(await self.page.locator('.kp-grid').evaluate(
             "el => getComputedStyle(el).gridTemplateColumns.split(' ').length"), 1)
-
-    async def test_snapshot_page_does_not_start_interactive_routes(self):
-        self.interactive = False
-        await self.open_map()
-        await self.page.clock.fast_forward(400_000)
-        self.assertEqual(await self.page.locator('.map-tools').count(), 0)
-        self.assertEqual(self.count("/airspace.json"), 0)
-        self.assertEqual(self.count("/tfrs.json"), 0)
-        self.assertEqual(self.count("/search.json"), 0)
 
 
 if __name__ == "__main__":

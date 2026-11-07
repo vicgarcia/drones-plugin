@@ -10,7 +10,7 @@ preflight and live air traffic when you want them.
 
 - **Single-file executable** - Uses `uv run --script` with inline dependencies (PEP 723)
 - **Airspace** - Controlled airspace, LAANC ceilings, special use and security airspace, TFRs and stadiums at a point or within a radius, plus TFRs close by
-- **Interactive map** - Airspace loads as you pan and zoom, with fifteen-minute TFR refreshes, address/coordinate search and optional live traffic/radar; or export a fixed-area GeoJSON or PNG
+- **Interactive map** - Airspace loads as you pan and zoom, with fifteen-minute TFR refreshes, address/coordinate search and optional live traffic/radar; or export a fixed-area GeoJSON
 - **Preflight** - Airspace plus the weather for when you plan to fly, as one GO / CAUTION / NO-GO verdict
 - **METAR and TAF, decoded** - Current conditions and forecasts in plain language, with Part 107 and wind-limit checks
 - **Nearest station logic** - Current conditions from the closest METAR station, forecasts from the closest airport that issues TAFs
@@ -68,9 +68,6 @@ In a coding harness, install `drones.py` as a command in your PATH and give the 
 ```bash
 # Your aircraft's wind limit in knots (default 20); --max-wind overrides it
 export DRONES_MAX_WIND=18
-
-# Browser for map --png, when Chrome/Edge/Chromium is not found automatically
-export DRONES_BROWSER="/path/to/chrome"
 ```
 
 ## Commands
@@ -246,8 +243,6 @@ transients cause loss of control. drones.py instead compares the higher of wind 
 drones.py map "4406 Fillmore St, Hollywood, FL"
 drones.py map 41.79,-87.74 --radius 2 --tiles satellite
 drones.py map "Denver, CO" --geojson > denver.geojson
-drones.py map "Navy Pier, Chicago" --radius 2 --png navy-pier.png
-drones.py map 41.79,-87.74 --png midway.png --tiles satellite --size 1920x1080
 drones.py map "Chicago Midway Airport" --adsb --radar
 ```
 
@@ -282,8 +277,8 @@ Search never runs on each keystroke; requests share a paced Nominatim client and
 A separate search pin is added without moving the original radius ring. Searching does not
 perform an `airspace` verdict or grant authorization.
 
-**Exports:** `--geojson` and `--png` remain snapshots around the requested launch point, with
-TFRs out to 30 NM. PNGs have no interactive search or viewport/TFR refreshes.
+**Export:** `--geojson` prints a snapshot around the requested launch point, with TFRs out to
+30 NM.
 
 `--adsb` adds live air traffic from [adsb.fi](https://adsb.fi), polled every 3 seconds and coloured by
 altitude; aircraft on the ground are left off. Coverage comes from volunteer ground receivers, so low traffic far from a feeder and
@@ -370,8 +365,8 @@ Run the offline regression suite (service calls are mocked, network access is re
 uv run --with 'geopy>=2.4.0' --with 'requests>=2.31.0' python -m unittest discover -s tests -v
 ```
 
-Optional browser regressions use an installed Chrome/Edge/Chromium and intercept all map/data
-requests. They download only the pinned Leaflet JS/CSS, never live FAA/weather/traffic data:
+Optional browser regressions use an installed Chrome/Edge/Chromium (set `DRONES_BROWSER` to its
+path if it isn't found) and intercept all map/data requests. They download only the pinned Leaflet JS/CSS, never live FAA/weather/traffic data:
 
 ```bash
 DRONES_BROWSER_TESTS=1 uv run --with geopy --with requests --with playwright python -m unittest discover -s tests -p test_map_browser.py -v

@@ -12,7 +12,7 @@ return, and the decisions behind the defaults.
 
 | Path | What's in it |
 |---|---|
-| `skills/drones/scripts/drones.py` | the whole CLI: PEP 723 uv script, ~4,100 lines |
+| `skills/drones/scripts/drones.py` | the whole CLI: PEP 723 uv script, ~4,000 lines |
 | `skills/drones/SKILL.md` | agent-facing contract, including the FAA rules reference |
 | `skills/drones/scripts/requirements.txt` | the script's deps, for environments without uv |
 | `tests/test_drones.py` | offline CLI and logic tests (all network mocked) |
@@ -20,13 +20,13 @@ return, and the decisions behind the defaults.
 | `tests/test_map_browser.py` | opt-in Chromium tests of the map page, all requests intercepted |
 | `.claude-plugin/` | `plugin.json` (plugin `drones`) and `marketplace.json` (`drones-plugin`, source `./`) |
 | `.github/workflows/release.yml` | on push to main: date-versioned release with the plugin and skill zips |
-| `screenshot.png` | README image: `map "4406 Fillmore St, Hollywood, FL" --tiles light --adsb --size 1200x800` |
+| `screenshot.png` | README image: `map "4406 Fillmore St, Hollywood, FL" --tiles light --adsb`, captured at 1200x800 |
 
 ## Commands
 
 - `uv run --script skills/drones/scripts/drones.py --help`: run the CLI from the repo
 - `uv run --with 'geopy>=2.4.0' --with 'requests>=2.31.0' python -m unittest discover -s tests -v`:
-  offline suite (103 tests, 8 skipped browser tests)
+  offline suite (95 tests, 7 skipped browser tests)
 - `DRONES_BROWSER_TESTS=1 uv run --with geopy --with requests --with playwright python -m unittest discover -s tests -p test_map_browser.py -v`:
   browser tests; needs an installed Chrome/Edge/Chromium and downloads only the pinned Leaflet assets
 - `claude plugin validate .`: check the plugin and marketplace manifests
@@ -46,8 +46,7 @@ Sections in `drones.py` are split by `# ====` banners. Top to bottom:
 - **Logic**: `check_point()` (one point, the `airspace` verdict via `assess()`), `survey()` (a
   radius, for `nearby` and map snapshots), `preflight()` (airspace plus weather at a time).
 - **Map**: `map_features()` builds GeoJSON with simplestyle properties, `map_page()` fills
-  `MAP_PAGE`, `serve_map()`/`_map_server()` serve it on `127.0.0.1`, `screenshot_map()` drives
-  headless Chrome (`find_browser()`, `DRONES_BROWSER`). `MapData` + `MapCache` back the live
+  `MAP_PAGE`, `serve_map()`/`_map_server()` serve it on `127.0.0.1`. `MapData` + `MapCache` back the live
   viewport routes.
 - **Commands**: `cmd_<name>(args) -> int` handlers, `build_parser()`, `main()`.
 
@@ -475,7 +474,6 @@ Sources for that status: [UAS Dashboard on Part 108](https://uasdashboard.com/gu
   Full output only on request.
 - **Map on request only.** It is interactive and runs in the background with its URL handed over.
   - One map at a time, stopped when the user is done.
-  - A PNG only when an image is asked for.
   - **Live view is opt-in:** `--adsb --radar` only for "live", "traffic" or "radar" requests.
 - **Mission areas:** `airspace` checks one point. A site that straddles a LAANC grid or class
   boundary needs `nearby` with a radius about the site's size, planning to the lowest ceiling.
@@ -509,9 +507,8 @@ Sources for that status: [UAS Dashboard on Part 108](https://uasdashboard.com/gu
   - Provider attribution stays visible.
   - A bottom status pill keeps fetch-age and failure warnings outside the collapsed card.
 - **Always-listed toggles.**
-  - Interactive maps list every thematic toggle, even when empty, so panning into a new area can
+  - The map lists every thematic toggle, even when empty, so panning into a new area can
     fill them without rebuilding the control.
-  - Exports keep the smaller snapshot panel (`ALWAYS_LISTED` keeps LAANC and TFRs).
   - The original center and radius stay fixed and unlisted (`FIXED_OVERLAYS`). In-map search adds
     a separate pin.
 - **Styling.**
@@ -528,8 +525,7 @@ Sources for that status: [UAS Dashboard on Part 108](https://uasdashboard.com/gu
 
 ### Interactive navigation and freshness
 
-Browser maps use `MapData`; `--geojson` and `--png` keep the `survey()` snapshot around the launch
-point.
+Browser maps use `MapData`; `--geojson` keeps the `survey()` snapshot around the launch point.
 
 - **`airspace.json?layer=KEY&bbox=W,S,E,N`** queries one enabled FAA layer by envelope.
   - Pan and zoom are debounced 250 ms, with four client workers and a shared four-request server
@@ -572,7 +568,7 @@ point.
   line when changing how the skill runs it.
 - Network access is refused in the offline tests. A test that reaches the network fails rather
   than hits a live FAA service.
-- Browser tests and `--png` use an installed browser; set `DRONES_BROWSER` if it isn't found.
+- Browser tests use an installed browser; set `DRONES_BROWSER` if it isn't found.
 
 ## Commits
 

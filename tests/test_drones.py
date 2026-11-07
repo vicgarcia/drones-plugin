@@ -192,55 +192,6 @@ class FAAClientTests(OfflineCase):
         self.assertEqual(props["url"], "https://tfr.faa.gov/tfr3/?page=detail_6_9169")
 
 
-class ScreenshotTests(OfflineCase):
-    def test_size_parsing(self):
-        self.assertEqual(drones.parse_size("1920x1080"), (1920, 1080))
-        with self.assertRaises(drones.argparse.ArgumentTypeError):
-            drones.parse_size("big")
-
-    def test_browser_override_wins(self):
-        with patch.dict(drones.os.environ, {"DRONES_BROWSER": "/opt/chrome"}):
-            self.assertEqual(drones.find_browser(), "/opt/chrome")
-
-    def test_missing_browser_fails_clearly(self):
-        with patch.object(drones, "find_browser", return_value=None):
-            with self.assertRaisesRegex(drones.DronesError, "DRONES_BROWSER"):
-                drones.screenshot_map("<html>", {}, "x.png", (800, 600))
-
-    def test_runs_headless_browser_against_local_server(self):
-        server = Mock(server_address=("127.0.0.1", 54321))
-
-        def browser(command, **kwargs):
-            shot = next(a for a in command if a.startswith("--screenshot="))
-            Path(shot.split("=", 1)[1]).write_bytes(b"png")
-            return Mock(stdout="", stderr="")
-
-        with patch.object(drones, "find_browser", return_value="chrome"), \
-                patch.object(drones, "_map_server", return_value=server), \
-                patch.object(drones.threading, "Thread"), \
-                patch.object(drones.subprocess, "run", side_effect=browser) as run, \
-                drones.tempfile.TemporaryDirectory() as out:
-            saved = drones.screenshot_map("<html>", {}, str(Path(out) / "m.png"), (800, 600))
-            self.assertTrue(Path(saved).is_file())
-
-        command = run.call_args.args[0]
-        self.assertEqual(command[-1], "http://127.0.0.1:54321/")
-        self.assertIn("--window-size=800,600", command)
-        self.assertIn("--headless=new", command)
-        server.shutdown.assert_called_once()
-
-    def test_no_file_written_is_an_error(self):
-        server = Mock(server_address=("127.0.0.1", 54321))
-        with patch.object(drones, "find_browser", return_value="chrome"), \
-                patch.object(drones, "_map_server", return_value=server), \
-                patch.object(drones.threading, "Thread"), \
-                patch.object(drones.subprocess, "run",
-                             return_value=Mock(stdout="", stderr="GPU crashed")), \
-                drones.tempfile.TemporaryDirectory() as out:
-            with self.assertRaisesRegex(drones.DronesError, "GPU crashed"):
-                drones.screenshot_map("<html>", {}, str(Path(out) / "m.png"), (800, 600))
-
-
 class ThrottleTests(OfflineCase):
     def setUp(self):
         super().setUp()
@@ -378,26 +329,6 @@ class CommandTests(OfflineCase):
         self.assertIn("2 NOTAMs", props["title"])
         self.assertEqual([label for label, _ in props["_links"]], ["NOTAM 5/2809", "NOTAM 6/0100"])
         self.assertEqual(props["NOTAM 6/0100"], "Palm Beach, renewal")
-
-    def test_png_screenshots_instead_of_serving(self):
-        with patch.object(drones, "gather", fake_gather({})), \
-                patch.object(drones, "screenshot_map", return_value="C:/out/map.png") as shot, \
-                patch.object(drones, "serve_map") as serve:
-            code, out = self.run_cli("map", "41.79,-87.74", "--no-address",
-                                     "--png", "map.png", "--size", "800x600")
-        self.assertEqual(code, 0)
-        serve.assert_not_called()
-        page, collection, path, size = shot.call_args.args
-        self.assertEqual((path, size), ("map.png", (800, 600)))
-        self.assertIn("leaflet", page)
-        # The map is pinned to the image size so every tile loads before capture
-        self.assertIn("#map { width: 800px; height: 600px; }", page)
-        self.assertNotIn("__SCREENSHOT_CSS__", page)
-        self.assertIn("Saved map to C:/out/map.png", out)
-
-    def test_png_and_geojson_are_exclusive(self):
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            self.run_cli("map", "41.79,-87.74", "--png", "a.png", "--geojson")
 
     def test_bad_port_is_a_usage_error(self):
         with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as exit_info:

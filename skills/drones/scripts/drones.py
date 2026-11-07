@@ -24,11 +24,8 @@ import json
 import math
 import os
 import re
-import shutil
 import socket
-import subprocess
 import sys
-import tempfile
 import textwrap
 import threading
 import time
@@ -106,10 +103,6 @@ NEARBY_TFR_NM = 10.0
 # them and they decide whether you can fly at all
 TFR_REACH_NM = 30.0
 
-# Page time a headless screenshot allows for tiles and data to load
-SCREENSHOT_WAIT_MS = 20000
-# Square, since the map frames the circular search radius
-DEFAULT_PNG_SIZE = (1000, 1000)
 KM_PER_NM = 1.852
 
 # Interactive maps cache the slowly published FAA layers, but not moving TFRs.
@@ -138,8 +131,6 @@ Examples:
   drones.py map "Chicago Midway Airport"
   drones.py map 41.79,-87.74 --radius 5 --tiles satellite
   drones.py map "Denver, CO" --geojson > denver.geojson
-  drones.py map "Navy Pier, Chicago" --radius 2 --png navy-pier.png
-  drones.py map 41.79,-87.74 --png midway.png --tiles satellite --size 1920x1080
   drones.py map "Chicago Midway Airport" --adsb --radar
 
   drones.py metar "Hollywood, FL"
@@ -319,9 +310,6 @@ MAP_OVERLAYS = [
 # Overlays drawn for reference only, never intercepting clicks
 PASSIVE_OVERLAYS = ["radius"]
 
-# Overlays listed in the layer panel even when none are in range
-ALWAYS_LISTED = ["laanc", "tfrs"]
-
 # Overlays always drawn, left out of the layer control
 FIXED_OVERLAYS = ["radius", "location"]
 
@@ -441,7 +429,6 @@ MAP_PAGE = """\
     .kp-seg span { font-size: 12px; }
     .map-status { bottom: 44px; }
   }
-__SCREENSHOT_CSS__
 </style>
 </head>
 <body>
@@ -450,7 +437,6 @@ __SCREENSHOT_CSS__
 <script>
 const CENTER = __CENTER__;
 const OVERLAYS = __OVERLAYS__;
-const ALWAYS_LISTED = __ALWAYS_LISTED__;
 const BASEMAPS = __BASEMAPS__;
 const DEFAULT_BASEMAP = __DEFAULT_BASEMAP__;
 const PASSIVE = __PASSIVE__;
@@ -458,7 +444,7 @@ const FIXED = __FIXED__;
 // Live layers turned on with --adsb and --radar, null when off
 const TRAFFIC = __TRAFFIC__;
 const RADAR = __RADAR__;
-// Null for PNGs: interactive navigation must not change a snapshot's contents.
+// Limits for viewport loading, TFR refresh and search
 const INTERACTIVE = __INTERACTIVE__;
 // LAANC ceiling labels only once the grid cells are big enough to read
 const LABEL_ZOOM = 14;
@@ -494,8 +480,7 @@ function esc(value) {
   }[c]));
 }
 
-// Kestrel's controls, kept independent of data loading so PNGs can use the
-// same layer/basemap styling without starting interactive routes or search.
+// Kestrel's controls: search, basemaps and the layer list
 function mapPanel() {
   const icons = {
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/>',
@@ -516,14 +501,13 @@ function mapPanel() {
     status.classList.toggle('warning', !!message);
   };
   panel.onAdd = () => {
-    const el = L.DomUtil.create('div', 'kpanel' + (INTERACTIVE ? ' map-tools' : ''));
-    el.innerHTML = (INTERACTIVE
-      ? '<form class="kp-search" role="search">' +
+    const el = L.DomUtil.create('div', 'kpanel map-tools');
+    el.innerHTML = '<form class="kp-search" role="search">' +
         '<button class="kp-submit" type="submit" aria-label="Search" title="Search">' + svg('search') + '</button>' +
         '<input type="search" aria-label="Search address or coordinates" placeholder="Search address or lat, lng" ' +
         'autocomplete="off" maxlength="200" required>' +
         '<button class="kp-clear" type="button" aria-label="Clear search" title="Clear search" hidden>' + svg('clear') + '</button>' +
-        '</form><ul class="kp-results map-results" hidden></ul>' : '') +
+        '</form><ul class="kp-results map-results" hidden></ul>' +
       '<div class="kp-body" id="map-layer-options"><div class="kp-seg" role="radiogroup" aria-label="Basemap"></div>' +
       '<div class="kp-grid"></div></div>' +
       '<button class="kp-handle" type="button" aria-controls="map-layer-options"><span></span></button>';
@@ -531,22 +515,18 @@ function mapPanel() {
     L.DomEvent.disableScrollPropagation(el);
     grid = el.querySelector('.kp-grid');
     const handle = el.querySelector('.kp-handle');
-    let open = !INTERACTIVE || window.innerWidth >= 700;
-    if (INTERACTIVE) {
-      try {
-        const saved = JSON.parse(localStorage.getItem('drones-map-panel-open'));
-        if (typeof saved === 'boolean') open = saved;
-      } catch { /* storage is optional */ }
-    }
+    let open = window.innerWidth >= 700;
+    try {
+      const saved = JSON.parse(localStorage.getItem('drones-map-panel-open'));
+      if (typeof saved === 'boolean') open = saved;
+    } catch { /* storage is optional */ }
     const setOpen = value => {
       open = value;
       el.classList.toggle('open', value);
       handle.setAttribute('aria-expanded', String(value));
       handle.setAttribute('aria-label', value ? 'Hide layers' : 'Show layers');
       handle.title = value ? 'Hide layers' : 'Show layers';
-      if (INTERACTIVE) {
-        try { localStorage.setItem('drones-map-panel-open', JSON.stringify(value)); } catch { /* optional */ }
-      }
+      try { localStorage.setItem('drones-map-panel-open', JSON.stringify(value)); } catch { /* optional */ }
     };
     setOpen(open);
     handle.addEventListener('click', () => setOpen(!open));
@@ -568,7 +548,7 @@ function mapPanel() {
       });
       el.querySelector('.kp-seg').appendChild(label);
     }
-    if (INTERACTIVE) panel.searchElements = {
+    panel.searchElements = {
       el, input: el.querySelector('input[type=search]'),
       results: el.querySelector('.kp-results'), clear: el.querySelector('.kp-clear')
     };
@@ -1065,7 +1045,6 @@ fetch('data.json')
   .then(data => {
     for (const [key, label] of OVERLAYS) {
       const features = data.features.filter(f => (f.properties || {})._layer === key);
-      if (!features.length && !ALWAYS_LISTED.includes(key) && !INTERACTIVE) continue;
       const passive = PASSIVE.includes(key);
       layers[key] = L.geoJSON({ type: 'FeatureCollection', features }, {
         style: styleFor, pointToLayer: markerFor,
@@ -1081,7 +1060,7 @@ fetch('data.json')
       map.setView(CENTER, 12);
     }
     toggleCeilings();
-    if (INTERACTIVE) startInteractiveMap();
+    startInteractiveMap();
   })
   .catch(err => console.error('drones.py: failed to load data.json', err));
 </script>
@@ -2867,19 +2846,12 @@ def map_features(location: dict, data: dict, radius_nm: float) -> list:
     return features
 
 
-def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
-             adsb: bool = False, radar: bool = False, interactive: bool = False) -> str:
+def map_page(location: dict, tiles: str, adsb: bool = False, radar: bool = False) -> str:
     """
     Fill the Leaflet page template.
 
-    With a size, the map is pinned to exactly that many pixels for a
-    screenshot. Headless Chromium lays the page out in a viewport smaller than
-    --window-size and only grows it at capture time, too late for the tiles
-    the resize uncovers; a fixed-size map loads every tile up front.
-
     adsb and radar add the live layers, which the page polls from the local
-    server's traffic.json and radar.json. interactive enables viewport loading,
-    TFR refresh and search; it stays off for fixed-area PNGs.
+    server's traffic.json and radar.json.
     """
     traffic_config = {
         "attribution": ADSBFI_ATTRIBUTION,
@@ -2890,17 +2862,10 @@ def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
         "layer": RADAR_LAYER,
         "attribution": RADAR_ATTRIBUTION,
     } if radar else None
-    screenshot_css = ""
-    if size:
-        width, height = size
-        screenshot_css = (f"  #map {{ width: {width}px; height: {height}px; }}\n"
-                          "  html, body { overflow: hidden; }")
     return (MAP_PAGE
-            .replace("__SCREENSHOT_CSS__", screenshot_css)
             .replace("__TITLE__", _html_escape(location["query"]))
             .replace("__CENTER__", json.dumps([location["latitude"], location["longitude"]]))
             .replace("__OVERLAYS__", json.dumps(MAP_OVERLAYS))
-            .replace("__ALWAYS_LISTED__", json.dumps(ALWAYS_LISTED))
             .replace("__BASEMAPS__", json.dumps(TILE_LAYERS))
             .replace("__DEFAULT_BASEMAP__", json.dumps(tiles))
             .replace("__PASSIVE__", json.dumps(PASSIVE_OVERLAYS))
@@ -2910,7 +2875,7 @@ def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
             .replace("__INTERACTIVE__", json.dumps({
                 "airspace_ttl": MAP_AIRSPACE_TTL, "tfr_ttl": MAP_TFR_TTL,
                 "max_span_nm": MAP_MAX_SPAN_NM,
-            } if interactive else None)))
+            })))
 
 
 def _html_escape(text: str) -> str:
@@ -3286,94 +3251,6 @@ def serve_map(page: str, data: dict, port: int, open_browser: bool,
     return 0
 
 
-# Chromium-family browsers that can screenshot headless, checked in order
-BROWSER_COMMANDS = [
-    "chrome", "google-chrome", "google-chrome-stable",
-    "chromium", "chromium-browser", "msedge", "microsoft-edge",
-]
-
-
-def _browser_paths() -> list:
-    """Usual install locations on Windows and macOS, which are rarely on PATH."""
-    paths = []
-    for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
-                 os.environ.get("LOCALAPPDATA")):
-        if root:
-            paths += [
-                os.path.join(root, "Google", "Chrome", "Application", "chrome.exe"),
-                os.path.join(root, "Microsoft", "Edge", "Application", "msedge.exe"),
-                os.path.join(root, "Chromium", "Application", "chrome.exe"),
-            ]
-    paths += [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    ]
-    return paths
-
-
-def find_browser() -> Optional[str]:
-    """Locate Chrome, Edge or Chromium. DRONES_BROWSER overrides the search."""
-    override = os.environ.get("DRONES_BROWSER")
-    if override:
-        return override
-    for command in BROWSER_COMMANDS:
-        found = shutil.which(command)
-        if found:
-            return found
-    return next((path for path in _browser_paths() if os.path.isfile(path)), None)
-
-
-def screenshot_map(page: str, data: dict, path: str, size: tuple[int, int],
-                   wait_ms: int = SCREENSHOT_WAIT_MS, live: Optional[dict] = None) -> str:
-    """
-    Render the map to a PNG with a headless Chromium browser.
-
-    The page is served on a free localhost port for the duration. Headless
-    screenshots fire on a virtual clock, so wait_ms is the page time allowed
-    for the basemap tiles and data to land before the capture.
-    """
-    browser = find_browser()
-    if not browser:
-        raise DronesError("No Chrome, Edge or Chromium found for --png; "
-                            "install one or set DRONES_BROWSER to its path")
-
-    output = os.path.abspath(path)
-    if os.path.exists(output):
-        os.remove(output)  # so a stale file can't pass for a fresh capture
-
-    server = _map_server(page, data, 0, live)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{server.server_address[1]}/"
-
-    width, height = size
-    # A throwaway profile keeps headless runs clear of an open browser session
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:
-        command = [
-            browser, "--headless=new", "--disable-gpu", "--hide-scrollbars",
-            "--no-first-run", "--no-default-browser-check",
-            f"--user-data-dir={profile}",
-            f"--window-size={width},{height}",
-            f"--virtual-time-budget={wait_ms}",
-            f"--screenshot={output}",
-            url,
-        ]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True,
-                                    timeout=wait_ms / 1000 + 90)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise DronesError(f"Browser screenshot failed: {e}") from e
-        finally:
-            server.shutdown()
-            server.server_close()
-
-    if not os.path.isfile(output):
-        detail = (result.stderr or result.stdout or "").strip().splitlines()[-3:]
-        raise DronesError("Browser did not write a screenshot"
-                            + (": " + " | ".join(detail) if detail else ""))
-    return output
-
-
 def parse_port(value: str) -> int:
     """argparse type for a TCP port, so a bad value is a usage error, not a traceback."""
     port = int(value)
@@ -3381,18 +3258,6 @@ def parse_port(value: str) -> int:
         raise argparse.ArgumentTypeError(f"port must be 0-65535, got {port}")
     return port
 
-
-def parse_size(value: str) -> tuple[int, int]:
-    """argparse type for WIDTHxHEIGHT image sizes."""
-    match = re.match(r"^(\d{2,5})x(\d{2,5})$", value.strip().lower())
-    if not match:
-        raise argparse.ArgumentTypeError(f"expected WIDTHxHEIGHT like 1400x1000, got '{value}'")
-    return int(match.group(1)), int(match.group(2))
-
-
-# ============================================================================
-# Output
-# ============================================================================
 
 def _maps_url(lat: float, lng: float) -> str:
     return f"https://www.google.com/maps?q={lat},{lng}"
@@ -3708,17 +3573,10 @@ def cmd_map(args: argparse.Namespace) -> int:
             print(json.dumps(collection, indent=2))
             return 0
         live = live_routes(args.adsb, args.radar)
-        if args.png:
-            page = map_page(location, args.tiles, size=args.size,
-                            adsb=args.adsb, radar=args.radar)
-            saved = screenshot_map(page, collection, args.png, args.size, live=live)
-            print(f"\n  Saved map to {saved}\n")
-            return 0
         source = MapData(location)
         live.update({"/airspace.json": source.airspace, "/tfrs.json": source.tfrs,
                      "/search.json": source.search})
-        return serve_map(map_page(location, args.tiles, adsb=args.adsb, radar=args.radar,
-                                  interactive=True),
+        return serve_map(map_page(location, args.tiles, adsb=args.adsb, radar=args.radar),
                          collection, args.port, not args.no_open, live=live)
     except DronesError as e:
         return _fail(str(e))
@@ -4007,24 +3865,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not open a browser automatically"
     )
-    output = map_parser.add_mutually_exclusive_group()
-    output.add_argument(
+    map_parser.add_argument(
         "--geojson", "-g",
         action="store_true",
         help="Print the map data as GeoJSON instead of serving it"
-    )
-    output.add_argument(
-        "--png",
-        metavar="FILE",
-        help="Save a screenshot of the map instead of serving it "
-             "(needs Chrome, Edge or Chromium)"
-    )
-    map_parser.add_argument(
-        "--size",
-        type=parse_size,
-        default=DEFAULT_PNG_SIZE,
-        metavar="WxH",
-        help="Screenshot size for --png (default: {}x{})".format(*DEFAULT_PNG_SIZE)
     )
 
     for name, kind, about in [
