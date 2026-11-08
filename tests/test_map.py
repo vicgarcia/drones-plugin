@@ -459,15 +459,24 @@ class RouteTests(unittest.TestCase):
 
 
 class InteractiveCommandTests(OfflineCase):
-    def test_browser_uses_dynamic_routes(self):
+    def test_browser_uses_dynamic_routes_and_png_stays_snapshot(self):
         here = {**LOCATION, "query": "Midway"}
-        with patch.object(drones, "_locate", return_value=here), \
-                patch.object(drones, "survey", return_value={}), \
-                patch.object(drones, "serve_map", return_value=0) as serve:
-            drones.cmd_map(drones.build_parser().parse_args(["map", "here"]))
-        self.assertIn('"max_span_nm"', serve.call_args.args[0])
-        self.assertEqual(set(serve.call_args.kwargs["live"]),
-                         {"/airspace.json", "/tfrs.json", "/search.json"})
+        for png in (False, True):
+            with self.subTest(png=png), patch.object(drones, "_locate", return_value=here), \
+                    patch.object(drones, "survey", return_value={}), \
+                    patch.object(drones, "serve_map", return_value=0) as serve, \
+                    patch.object(drones, "screenshot_map", return_value="map.png") as shot:
+                args = drones.build_parser().parse_args(["map", "here", *(["--png", "map.png"] if png else [])])
+                drones.cmd_map(args)
+                if png:
+                    serve.assert_not_called()
+                    self.assertIn("const INTERACTIVE = null;", shot.call_args.args[0])
+                    self.assertEqual(shot.call_args.kwargs["live"], {})
+                else:
+                    shot.assert_not_called()
+                    self.assertNotIn("const INTERACTIVE = null;", serve.call_args.args[0])
+                    self.assertEqual(set(serve.call_args.kwargs["live"]),
+                                     {"/airspace.json", "/tfrs.json", "/search.json"})
 
 
 if __name__ == "__main__":

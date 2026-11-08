@@ -165,7 +165,8 @@ drones.py map "Denver, CO" --geojson > denver.geojson
 - **Blocks until stopped.** Run it in the background and give the user the URL it prints, which
   falls back to a free port when 8765 is taken. Before starting another, stop the old one
   (`pkill -f "drones.py map"`), and stop it when the user is done.
-- The page is only reachable from the computer the server runs on. In a sandbox such as Cowork, don't start the server: answer from `airspace` and
+- The page is only reachable from the computer the server runs on, and `--png` needs a desktop
+  browser. In a sandbox such as Cowork, don't start the server: answer from `airspace` and
   `nearby`, or hand over `--geojson` if the user wants the shapes.
 - Airspace only by default: LAANC grid, class, special use, defense and security airspace,
   TFRs, stadiums and airports, each toggled in the layer panel, including initially empty layers.
@@ -184,7 +185,9 @@ drones.py map "Denver, CO" --geojson > denver.geojson
 - Opt-ins for a live view: `--adsb` air traffic, `--radar` NOAA weather radar. Their toggles
   are present only when launched with those flags. The map never shows station weather;
   use `metar`/`taf` for that.
-- `--geojson` prints a fixed-area snapshot instead of serving, with TFRs out to 30 NM.
+- `--geojson` prints a fixed-area snapshot instead of serving; `--png FILE` saves the same
+  fixed-area map with no search or viewport/TFR refresh (needs Chrome, Edge or Chromium, or
+  `DRONES_BROWSER`) - only when the user asks for an image. Both keep TFRs out to 30 NM.
 
 ### preflight - airspace and weather for a time (on request)
 ```bash
