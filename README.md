@@ -284,7 +284,7 @@ A separate search pin is added without moving the original radius ring. Searchin
 perform an `airspace` verdict or grant authorization.
 
 **Exports:** `--geojson` and `--png` remain snapshots around the requested launch point, with
-TFRs out to 30 NM. PNGs show the map without its controls, and no viewport/TFR refreshes.
+TFRs out to 30 NM. PNGs show the map without its controls and never refresh the viewport or TFRs.
 
 `--adsb` adds live air traffic from [adsb.fi](https://adsb.fi), polled every 3 seconds and coloured by
 altitude; aircraft on the ground are left off. Coverage comes from volunteer ground receivers, so low traffic far from a feeder and
