@@ -2886,9 +2886,10 @@ def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
     Fill the Leaflet page template.
 
     With a size, the map is pinned to exactly that many pixels for a
-    screenshot. Headless Chromium lays the page out in a viewport smaller than
-    --window-size and only grows it at capture time, too late for the tiles
-    the resize uncovers; a fixed-size map loads every tile up front.
+    screenshot, with the controls hidden. Headless Chromium lays the page out
+    in a viewport smaller than --window-size and only grows it at capture
+    time, too late for the tiles the resize uncovers; a fixed-size map loads
+    every tile up front.
 
     adsb and radar add the live layers, which the page polls from the local
     server's traffic.json and radar.json. interactive enables viewport loading,
@@ -2906,8 +2907,10 @@ def map_page(location: dict, tiles: str, size: Optional[tuple[int, int]] = None,
     screenshot_css = ""
     if size:
         width, height = size
+        # A still image has nothing to click, so drop the controls but keep the attribution
         screenshot_css = (f"  #map {{ width: {width}px; height: {height}px; }}\n"
-                          "  html, body { overflow: hidden; }")
+                          "  html, body { overflow: hidden; }\n"
+                          "  .kpanel, .kbuttons, .map-status { display: none; }")
     return (MAP_PAGE
             .replace("__SCREENSHOT_CSS__", screenshot_css)
             .replace("__TITLE__", _html_escape(location["query"]))

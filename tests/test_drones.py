@@ -450,6 +450,7 @@ class CommandTests(OfflineCase):
         self.assertIn("leaflet", page)
         # The map is pinned to the image size so every tile loads before capture
         self.assertIn("#map { width: 800px; height: 600px; }", page)
+        self.assertIn(".kpanel, .kbuttons, .map-status { display: none; }", page)
         self.assertNotIn("__SCREENSHOT_CSS__", page)
         self.assertIn("Saved map to C:/out/map.png", out)
 

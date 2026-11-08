@@ -186,7 +186,7 @@ drones.py map "Denver, CO" --geojson > denver.geojson
   are present only when launched with those flags. The map never shows station weather;
   use `metar`/`taf` for that.
 - `--geojson` prints a fixed-area snapshot instead of serving; `--png FILE` saves the same
-  fixed-area map with no search or viewport/TFR refresh (needs Chrome, Edge or Chromium, or
+  fixed-area map with no controls or viewport/TFR refresh (needs Chrome, Edge or Chromium, or
   `DRONES_BROWSER`) - only when the user asks for an image. Both keep TFRs out to 30 NM.
 
 ### preflight - airspace and weather for a time (on request)
